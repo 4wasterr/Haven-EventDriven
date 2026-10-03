@@ -1,0 +1,19 @@
+{
+  "name": "haven-eventdriven-main",
+  "version": "1.0.0",
+  "description": "A responsive React frontend implementing the screens and browser interactions in [FRONTEND_REQUIREMENTS.md](FRONTEND_REQUIREMENTS.md). **This delivery is frontend-only, with no API integration**, as requested. Authentication, email, SMS, account lockout, and holiday results are clearly labelled local demonstrations.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "mariadb": "^3.5.4"
+  }
+}
