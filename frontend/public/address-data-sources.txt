@@ -1,0 +1,36 @@
+Haven address data — snapshot added October 5, 2026
+
+Countries, subdivisions, cities and postal records:
+Country State City by dr5hn
+https://github.com/dr5hn/countrystatecity-npm
+Open Database License (ODbL) 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+Database Contents License:
+https://opendatacommons.org/licenses/dbcl/1-0/
+
+Postal formats:
+Google libaddressinput address-validation metadata
+https://github.com/google/libaddressinput/wiki/AddressValidationMetadata
+https://chromium-i18n.appspot.com/ssl-address/data
+Creative Commons Attribution 4.0:
+https://creativecommons.org/licenses/by/4.0/
+
+US city/ZIP associations:
+GeoNames
+https://download.geonames.org/export/zip/US.zip
+Creative Commons Attribution 4.0:
+https://creativecommons.org/licenses/by/4.0/
+
+Adaptations: Philippine subdivisions filtered to provinces and Metro Manila;
+Metro Manila's 17 LGUs listed; Caloocan ZIP records grouped by postal area
+and labeled North/South; duplicate ZIP area names combined; country postal
+formats and phone prefixes attached; US ZIP/locality/state fields selected.
+
+Adapted country/subdivision database (ODbL 1.0):
+/api/addresses/countries
+Full source is frontend/src/data/countries.json in the project source.
+Metro Manila associations: backend/addresses.js in the project source.
+
+Directory coverage varies. These records do not verify delivery to an
+individual street address. Full postal directories cover 125 countries;
+remaining postal entries use country-specific format validation.

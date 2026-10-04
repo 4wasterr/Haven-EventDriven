@@ -1,21 +1,6 @@
-// These are supported dropdown choices, not a live address-verification service.
-export const COUNTRIES = {
-  PH: { name: 'Philippines', prefix: '+63', phone: /^9\d{9}$/, phoneHint: '10 digits beginning with 9, without the leading 0.', postal: /^\d{4}$/, regions: {
-    'Metro Manila': { zone: 'Asia/Manila', cities: { Manila: ['1000', '1004', '1008'], 'Quezon City': ['1100', '1101', '1104'], Makati: ['1200', '1210'], Pasig: ['1600', '1605'], Taguig: ['1630', '1634'] } },
-    Cebu: { zone: 'Asia/Manila', cities: { 'Cebu City': ['6000'], Mandaue: ['6014'], 'Lapu-Lapu City': ['6015'] } },
-    Cavite: { zone: 'Asia/Manila', cities: { Bacoor: ['4102'], Imus: ['4103'], Dasmarinas: ['4114'] } },
-    Laguna: { zone: 'Asia/Manila', cities: { Calamba: ['4027'], 'Santa Rosa': ['4026'], 'San Pablo': ['4000'] } },
-    'Davao del Sur': { zone: 'Asia/Manila', cities: { 'Davao City': ['8000'], Digos: ['8002'] } },
-  } },
-  US: { name: 'United States', prefix: '+1', phone: /^[2-9]\d{2}[2-9]\d{6}$/, phoneHint: '10 digits, including the area code.', postal: /^\d{5}(?:-\d{4})?$/, regions: {
-    California: { zone: 'America/Los_Angeles', cities: { 'San Francisco': ['94102', '94103'], 'Los Angeles': ['90012', '90013'] } },
-    'New York': { zone: 'America/New_York', cities: { 'New York City': ['10001', '10002'], Buffalo: ['14201'] } },
-  } },
-  GB: { name: 'United Kingdom', prefix: '+44', phone: /^7\d{9}$/, phoneHint: '10 mobile digits beginning with 7, without the leading 0.', postal: /^[A-Z]{1,2}\d[A-Z\d]? \d[A-Z]{2}$/, regions: {
-    England: { zone: 'Europe/London', cities: { London: ['SW1A 1AA', 'EC1A 1BB'], Manchester: ['M1 1AE'] } },
-    Scotland: { zone: 'Europe/London', cities: { Edinburgh: ['EH1 1YZ'], Glasgow: ['G1 1XW'] } },
-  } },
-};
+import countryData from './data/countries.json' with { type: 'json' };
+import { parsePhoneNumberFromString, isSupportedCountry } from 'libphonenumber-js/max';
+export const COUNTRIES = countryData;
 
 export const PUBLIC_EMAIL_PROVIDERS = new Set([
   'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'hotmail.co.uk',
@@ -27,6 +12,20 @@ export const PUBLIC_EMAIL_PROVIDERS = new Set([
 export const normalizeEmail = (value = '') => value.trim().toLowerCase();
 export const validEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 255;
 export const phoneDigits = (value = '') => value.replace(/[\s()-]/g, '');
+export function internationalMobileNumber(value, countryCode) {
+  const country = COUNTRIES[countryCode], digits = phoneDigits(value);
+  if (!country || !/^\d+$/.test(digits) || (countryCode === 'PH' && !/^9\d{9}$/.test(digits))) return '';
+  const number = parsePhoneNumberFromString(country.prefix + digits);
+  if (!number?.isValid() || !['MOBILE', 'FIXED_LINE_OR_MOBILE'].includes(number.getType())) return '';
+  if (isSupportedCountry(countryCode) && number.country && number.country !== countryCode) return '';
+  return number.number;
+}
+export function postalCodeValid(countryCode, value) {
+  const country = COUNTRIES[countryCode], code = String(value || '').trim().toUpperCase();
+  if (!country) return false;
+  if (!country.postalApplicable) return code === 'N/A';
+  return country.postalPattern ? new RegExp(`^(?:${country.postalPattern})$`, 'i').test(code) : /^[\p{L}\p{N}][\p{L}\p{N} -]{0,19}$/u.test(code);
+}
 export const passwordRules = (value = '') => [
   { label: '12 or more characters', valid: value.length >= 12 },
   { label: 'Uppercase letter', valid: /[A-Z]/.test(value) },
@@ -47,7 +46,7 @@ export function birthdayError(value, now = new Date()) {
   return age < 13 ? 'You must be at least 13 years old to register.' : '';
 }
 
-export function validateRegistration(values, now = new Date()) {
+export function validateRegistration(values, now = new Date(), addressChoices) {
   const errors = {};
   for (const key of ['firstName', 'lastName']) {
     const name = (values[key] || '').trim();
@@ -61,15 +60,16 @@ export function validateRegistration(values, now = new Date()) {
   else if (!PUBLIC_EMAIL_PROVIDERS.has(email.split('@')[1])) errors.email = 'Use a supported public email provider, such as Gmail, Outlook, Yahoo, iCloud, or Proton.';
   const country = COUNTRIES[values.country];
   if (!country) errors.country = 'Select a supported country.';
-  if (!country?.phone.test(phoneDigits(values.mobile))) errors.mobile = country?.phoneHint || 'Select a country and enter a valid mobile number.';
+  if (!internationalMobileNumber(values.mobile, values.country)) errors.mobile = country?.phoneHint || 'Select a country and enter a valid mobile number.';
   const street = (values.houseStreet || '').trim();
   if (!street || street.length > 255 || !/^[\p{L}\p{N}\s.,'\u2019/#()&-]+$/u.test(street) || !/[\p{L}\p{N}]/u.test(street)) errors.houseStreet = 'Enter a house and street using letters, numbers, and standard punctuation (maximum 255 characters).';
   const region = country?.regions[values.region];
   if (!region) errors.region = 'Select a province or state.';
-  const postcodes = region?.cities[values.city];
-  if (!postcodes) errors.city = 'Select a city in the chosen province or state.';
-  if (!country?.postal.test(values.postal || '') || !postcodes?.includes(values.postal)) errors.postal = 'Select a supported postal code for this city.';
+  if (!values.city?.trim() || values.city.length > 100 || (addressChoices?.cities && !addressChoices.cities.some(city => city.name === values.city))) errors.city = 'Select a city in the chosen province or state.';
+  const postalValid = addressChoices?.postalMode === 'select' ? addressChoices.postalCodes.some(option => option.value === values.postal) : postalCodeValid(values.country, values.postal);
+  if (!postalValid) errors.postal = 'Enter or select a valid postal code for this address.';
   if (!passwordRules(values.password).every((rule) => rule.valid)) errors.password = 'Use at least 12 characters with uppercase, lowercase, a number, and a special character.';
+  if (new TextEncoder().encode(values.password || '').length > 72) errors.password = 'Use a password of at most 72 UTF-8 bytes.';
   if (!values.confirmPassword || values.confirmPassword !== values.password) errors.confirmPassword = 'Passwords must match exactly.';
   return errors;
 }

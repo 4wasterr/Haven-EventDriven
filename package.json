@@ -1,0 +1,12 @@
+{
+  "name": "haven",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "start": "npm --prefix backend start",
+    "build": "npm --prefix frontend run build",
+    "test": "npm --prefix backend test && npm --prefix frontend test"
+  },
+  "engines": { "node": ">=22.12.0" }
+}

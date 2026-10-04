@@ -1,11 +1,11 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { COUNTRIES, normalizeEmail, passwordRules, suggestPassword, validateLogin, validateRegistration } from './validation.mjs';
-import { DEMO_CREDENTIALS, STORAGE_KEY, attemptLogin, countdown, createAccount, formatTime, initialDemo, resendOtp, timeZoneFor, unlockAccount, verifyEmail, verifyOtp } from './demo.mjs';
-import { CATEGORIES, YEARS, calendarCells, previewHolidays } from './holiday-preview.mjs';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { COUNTRIES, passwordRules, suggestPassword, validateLogin, validateRegistration } from './validation.mjs';
+import { countdown, formatTime, timeZoneFor } from './format.mjs';
+import { api } from './api.mjs';
+import { CATEGORIES, YEARS, calendarCells } from './calendar.mjs';
 
 const AppContext = createContext(null);
 const useApp = () => useContext(AppContext);
-const pause = (milliseconds = 450) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const initials = (account) => `${account.firstName[0]}${account.lastName[0]}`;
 const fullName = (account) => `${account.firstName} ${account.middleInitial ? `${account.middleInitial} ` : ''}${account.lastName}`;
 
@@ -36,7 +36,6 @@ function Link({ to, children, onClick, ...props }) {
 
 function Brand() { return <Link className="brand" to="/dashboard"><span className="brand-mark" aria-hidden="true">h.</span>haven<span className="brand-dot">.</span></Link>; }
 function Notice({ children, type = 'error' }) { return children ? <div className={`notice ${type}`} role={type === 'error' ? 'alert' : 'status'}>{children}</div> : null; }
-function DemoNote() { return <span className="demo-label">Frontend demo · use sample details</span>; }
 function Footer() { return <footer><span className="brand">haven.</span><p>A little space for your everyday.</p><span>PHILIPPINES · ASIA / MANILA</span></footer>; }
 function useNow() {
   const [now, setNow] = useState(Date.now);
@@ -60,15 +59,44 @@ function Field({ name, label, value, onChange, error, hint, required = true, opt
 function focusError(errors) { requestAnimationFrame(() => document.getElementById(Object.keys(errors)[0])?.focus()); }
 
 function AuthShell({ children, step, wide = false }) {
-  return <div className="public-layout"><header className="public-header"><Brand /><DemoNote /><Link className="text-link" to="/login">Sign in ↗</Link></header>
+  return <div className="public-layout"><header className="public-header"><Brand /><Link className="text-link" to="/login">Sign in ↗</Link></header>
     <main id="main-content" className={`auth-main ${wide ? 'wide' : ''}`}>
       {step && <ol className="steps" aria-label="Registration progress">{['Your details', 'Verify email', 'Verify mobile'].map((title, index) => <li key={title} className={step === index + 1 ? 'current' : step > index + 1 ? 'complete' : ''} aria-current={step === index + 1 ? 'step' : undefined}><span>{step > index + 1 ? '✓' : `0${index + 1}`}</span>{title}</li>)}</ol>}
       {children}
     </main><div className="footer-wrap"><Footer /></div></div>;
 }
 
+function useAddressChoices(country, region, city) {
+  const [cities, setCities] = useState([]);
+  const [postal, setPostal] = useState({ mode: 'input', options: [] });
+  const [cityLoading, setCityLoading] = useState(false);
+  const [postalLoading, setPostalLoading] = useState(false);
+  const [cityError, setCityError] = useState('');
+  const [postalError, setPostalError] = useState('');
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setCities([]); setCityError(''); setCityLoading(Boolean(region));
+    if (region) api(`/addresses/cities?${new URLSearchParams({ country, region })}`, undefined, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setCities(data.cities); })
+      .catch(error => { if (!controller.signal.aborted) setCityError(error.message); })
+      .finally(() => { if (!controller.signal.aborted) setCityLoading(false); });
+    return () => controller.abort();
+  }, [country, region, retry]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setPostal({ mode: 'input', options: [] }); setPostalError(''); setPostalLoading(Boolean(city));
+    if (city) api(`/addresses/postal-codes?${new URLSearchParams({ country, region, city })}`, undefined, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) setPostal(data); })
+      .catch(error => { if (!controller.signal.aborted) setPostalError(error.message); })
+      .finally(() => { if (!controller.signal.aborted) setPostalLoading(false); });
+    return () => controller.abort();
+  }, [country, region, city, retry]);
+  return { cities, postal, cityLoading, postalLoading, error: cityError || postalError, retry: () => setRetry(value => value + 1) };
+}
+
 function Registration() {
-  const { demo, setDemo, navigate } = useApp();
+  const { refreshSession, navigate } = useApp();
   const [values, setValues] = useState({ firstName: '', lastName: '', middleInitial: '', birthday: '', email: '', mobile: '', houseStreet: '', country: 'PH', region: '', city: '', postal: '', password: '', confirmPassword: '' });
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
@@ -77,8 +105,10 @@ function Registration() {
   const [showPassword, setShowPassword] = useState(false);
   const country = COUNTRIES[values.country];
   const region = country?.regions[values.region];
+  const address = useAddressChoices(values.country, values.region, values.city);
   function change(name, value) {
-    const resets = name === 'country' ? { region: '', city: '', postal: '', mobile: '' } : name === 'region' ? { city: '', postal: '' } : name === 'city' ? { postal: '' } : {};
+    const emptyPostal = COUNTRIES[name === 'country' ? value : values.country]?.postalApplicable ? '' : 'N/A';
+    const resets = name === 'country' ? { region: '', city: '', postal: emptyPostal, mobile: '' } : name === 'region' ? { city: '', postal: emptyPostal } : name === 'city' ? { postal: emptyPostal } : {};
     setValues((previous) => ({ ...previous, ...resets, [name]: value }));
     setErrors((previous) => { const next = { ...previous }; for (const key of [name, ...Object.keys(resets)]) delete next[key]; return next; });
     setMessage('');
@@ -88,21 +118,20 @@ function Registration() {
   async function submit(event) {
     event.preventDefault();
     if (busy) return;
-    const nextErrors = validateRegistration(values);
-    if (demo.accounts.some((account) => account.email === normalizeEmail(values.email))) nextErrors.email = 'This email is already registered in this demo. Sign in or use another sample address.';
+    const nextErrors = validateRegistration(values, new Date(), { cities: address.cities, postalMode: address.postal.mode, postalCodes: address.postal.options });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) { setMessage('Please correct the highlighted fields.'); focusError(nextErrors); return; }
-    const recentRequests = demo.registrationRequests.filter((timestamp) => timestamp > Date.now() - 3600000);
-    if (recentRequests.length >= 5) { setMessage('Demo registration limit reached: five submissions per hour. Please try again later.'); return; }
     setBusy(true); setMessage('');
     try {
-      const account = await createAccount(values);
-      await pause();
-      setDemo((previous) => ({ ...previous, accounts: [...previous.accounts, account], pendingId: account.id, registrationRequests: [...recentRequests, Date.now()] }));
-      navigate('/verify-email');
-    } catch { setMessage('The demo could not create your account. Please try again.'); }
-    finally { setBusy(false); }
+      const result = await api('/register', values);
+      await refreshSession();
+      navigate(result.email_submitted ? '/verify-email' : '/verify-email?delivery=failed');
+    } catch (error) {
+      setMessage(error.message);
+      if (error.data?.errors) { setErrors(error.data.errors); focusError(error.data.errors); }
+    } finally { setBusy(false); }
   }
+
   function suggest() {
     const password = suggestPassword();
     setValues((previous) => ({ ...previous, password, confirmPassword: password }));
@@ -113,134 +142,157 @@ function Registration() {
     <div className="form-card"><div className="form-title"><h2>Create your account</h2><span className="small-note">* Required fields</span></div><p className="form-description">A few details, and you’re on your way.</p><Notice>{message}</Notice>
       <form onSubmit={submit} noValidate aria-label="Registration"><fieldset disabled={busy}><legend className="sr-only">Registration details</legend>
         <h3 className="form-section-title">About you</h3><div className="form-grid">{field('firstName', 'First name', { autoComplete: 'given-name', maxLength: 50, placeholder: 'Alex' })}{field('lastName', 'Last name', { autoComplete: 'family-name', maxLength: 50, placeholder: 'Lopez' })}{field('middleInitial', 'Middle initial', { required: false, maxLength: 2, placeholder: 'M.', autoComplete: 'additional-name' })}{field('birthday', 'Birthday', { type: 'text', inputMode: 'numeric', maxLength: 10, placeholder: 'MM/DD/YYYY', hint: 'MM/DD/YYYY · You must be 13 or older.' })}</div>
-        <h3 className="form-section-title">Your address</h3>{field('houseStreet', 'House & street', { autoComplete: 'street-address', maxLength: 255, placeholder: '24 Palm Street, Barangay San Antonio' })}<div className="form-grid address-grid">{field('country', 'Country', { autoComplete: 'country', options: Object.entries(COUNTRIES).map(([value, item]) => ({ value, label: item.name })) })}{field('region', 'Province / state', { autoComplete: 'address-level1', options: Object.keys(country?.regions || {}) })}{field('city', 'City', { autoComplete: 'address-level2', disabled: !region, options: Object.keys(region?.cities || {}) })}{field('postal', 'ZIP / postal code', { autoComplete: 'postal-code', disabled: !values.city, options: region?.cities[values.city] || [] })}</div><p className="field-hint">Choose from the supported locations. City and postal choices follow your province or state.</p>
-        <h3 className="form-section-title">Contact details</h3><div className="form-grid">{field('email', 'Email address', { type: 'email', autoComplete: 'email', maxLength: 255, placeholder: 'you@gmail.com', hint: 'Public email providers only; company domains are not accepted.' })}{field('mobile', 'Mobile number', { type: 'tel', autoComplete: 'tel-national', inputMode: 'tel', prefix: country?.prefix, placeholder: values.country === 'PH' ? '917 123 4567' : values.country === 'GB' ? '7400 123456' : '415 555 0123', hint: country?.phoneHint })}</div>
+        <h3 className="form-section-title">Your address</h3>{field('houseStreet', 'House & street', { autoComplete: 'street-address', maxLength: 255, placeholder: 'House number, street, subdivision / barangay' })}
+        <div className="form-grid address-grid">
+          {field('country', 'Country', { autoComplete: 'country', options: Object.entries(COUNTRIES).map(([value, item]) => ({ value, label: item.name })) })}
+          {field('region', values.country === 'PH' ? 'Province / Metro Manila' : 'Province / state', { autoComplete: 'address-level1', options: Object.keys(country?.regions || {}) })}
+          {field('city', 'City / municipality', { autoComplete: 'address-level2', disabled: !region || address.cityLoading || !address.cities.length, options: address.cities.map(city => city.name), hint: address.cityLoading ? 'Loading cities…' : region && !address.cities.length && !address.error ? 'No cities are listed for this subdivision.' : undefined })}
+          {field('postal', 'ZIP / postal code', { autoComplete: 'postal-code', disabled: !values.city || address.postalLoading || !country?.postalApplicable,
+            options: !country?.postalApplicable ? [{ value: 'N/A', label: 'Not used in this country' }] : address.postal.mode === 'select' ? address.postal.options : undefined,
+            maxLength: 20, placeholder: country?.postalExample, hint: address.postalLoading ? 'Loading postal areas…' : address.postal.mode === 'input' && values.city ? address.postal.hint : undefined })}
+        </div>
+        <p className="field-hint">Select your province or state, then your city. For Caloocan, select the postal area that matches your address; include your barangay and subdivision above.</p>
+        <p className="field-hint"><a href="/address-data-sources.txt" target="_blank" rel="noreferrer">Address data sources</a></p>
+        {address.error && <><Notice>{address.error}</Notice><button type="button" className="text-button" onClick={address.retry}>Retry address lookup</button></>}
+        <h3 className="form-section-title">Contact details</h3><div className="form-grid">{field('email', 'Email address', { type: 'email', autoComplete: 'email', maxLength: 255, placeholder: 'you@gmail.com', hint: 'Public email providers only; company domains are not accepted.' })}{field('mobile', 'Mobile number', { type: 'tel', autoComplete: 'tel-national', inputMode: 'tel', prefix: country?.prefix, placeholder: values.country === 'PH' ? '917 123 4567' : values.country === 'GB' ? '7400 123456' : 'National mobile number', hint: country?.phoneHint })}</div>
         <h3 className="form-section-title">Keep it secure</h3><div className="form-grid">{field('password', 'Password', { type: showPassword ? 'text' : 'password', autoComplete: 'new-password', placeholder: 'Create a password' })}{field('confirmPassword', 'Confirm password', { type: showPassword ? 'text' : 'password', autoComplete: 'new-password', placeholder: 'Re-enter your password' })}</div>
         <ul className="password-rules" aria-label="Password requirements">{passwordRules(values.password).map((rule) => <li key={rule.label} className={rule.valid ? 'met' : ''}><span aria-hidden="true">{rule.valid ? '✓' : '○'}</span><span className="sr-only">{rule.valid ? 'Met: ' : 'Required: '}</span>{rule.label}</li>)}</ul>
         <div className="password-tools"><button type="button" className="text-button" onClick={suggest}>Suggest a strong password ↗</button><label className="checkbox-label"><input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} />Show passwords</label></div>
         {generated && <p className="suggested-password" role="status">Suggested password: <strong>{generated}</strong><br />Both password fields have been filled.</p>}
         <button className="button primary full" type="submit">{busy ? 'Creating account…' : 'Create account'}<span aria-hidden="true">↗</span></button>
-      </fieldset></form><p className="sample-note centered">Demo details stay in this browser tab. No email or SMS is sent.</p>
+      </fieldset></form>
     </div></section></AuthShell>;
 }
 
 function Login() {
-  const { demo, setDemo, updateAccount, navigate } = useApp();
+  const { refreshSession, navigate } = useApp();
   const [values, setValues] = useState({ email: '', password: '' });
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [alertAccount, setAlertAccount] = useState(null);
-  function change(name, value) { setValues((previous) => ({ ...previous, [name]: value })); setErrors((previous) => ({ ...previous, [name]: '' })); setMessage(''); setAlertAccount(null); }
+  const [unlockMessage, setUnlockMessage] = useState('');
+  function change(name, value) { setValues(previous => ({ ...previous, [name]: value })); setErrors(previous => ({ ...previous, [name]: '' })); setMessage(''); }
   async function submit(event) {
     event.preventDefault(); if (busy) return;
     const nextErrors = validateLogin(values); setErrors(nextErrors);
     if (Object.keys(nextErrors).length) { focusError(nextErrors); return; }
-    setBusy(true); setMessage(''); setAlertAccount(null);
-    try {
-      const account = demo.accounts.find((item) => item.email === normalizeEmail(values.email));
-      const result = await attemptLogin(account, values.password); await pause();
-      if (result.account) updateAccount(result.account);
-      if (result.status === 'success') { setDemo((previous) => ({ ...previous, currentId: account.id, pendingId: null })); navigate('/dashboard'); }
-      else if (result.status === 'email' || result.status === 'mobile') { setDemo((previous) => ({ ...previous, pendingId: account.id })); navigate(result.status === 'email' ? '/verify-email' : '/verify-mobile'); }
-      else { setMessage('Invalid email or password.'); if (result.account?.locked) setAlertAccount(result.account); }
-    } catch { setMessage('The demo could not sign you in. Please try again.'); }
+    setBusy(true); setMessage('');
+    try { const result = await api('/login', values); await refreshSession(); navigate(result.next); }
+    catch (error) { setMessage(error.message); }
     finally { setBusy(false); }
   }
-  return <AuthShell><section className="login-section"><div className="login-copy"><p className="eyebrow">GOOD TO SEE YOU AGAIN</p><h1>Welcome back.</h1><p>Your account, your calendar,<br />and a little room to breathe.</p><span className="decorative-orbit" aria-hidden="true">h.</span></div><div className="form-card"><h2>Sign in to Haven</h2><p className="form-description">Your everyday starts here.</p><Notice>{message}</Notice><form onSubmit={submit} noValidate aria-label="Sign in"><fieldset disabled={busy}><legend className="sr-only">Sign-in credentials</legend><Field name="email" label="Email address" type="email" autoComplete="username" value={values.email} onChange={(value) => change('email', value)} error={errors.email} placeholder="you@gmail.com" /><Field name="password" label="Password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={values.password} onChange={(value) => change('password', value)} error={errors.password} placeholder="Enter your password" /><div className="login-options"><label className="checkbox-label"><input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} />Show password</label></div><button className="button primary full" type="submit">{busy ? 'Signing in…' : 'Sign in'}<span aria-hidden="true">↗</span></button></fieldset></form><p className="sample-note centered">New around here? <Link to="/register">Create an account ↗</Link></p>
-      <details className="demo-preview"><summary>Try the frontend demo</summary><p>Sample email: <strong>{DEMO_CREDENTIALS.email}</strong><br />Sample password: <strong>{DEMO_CREDENTIALS.password}</strong></p><button className="text-button" type="button" disabled={busy} onClick={() => { setValues({ ...DEMO_CREDENTIALS }); setErrors({}); setMessage(''); }}>Fill sample credentials</button><p className="sample-note">Sign-in and account protection are simulated in this tab.</p></details>
-      {alertAccount && <details className="demo-preview" open><summary>Demo security email preview</summary><p><strong>Subject: Security alert — your Haven account is locked</strong></p><p>Dear {alertAccount.firstName}, your account was locked after three unsuccessful sign-in attempts. Wait two minutes, then follow this link to unlock your account.</p><Link className="button outline full" to={`/unlock-account?token=${alertAccount.unlockToken}`}>Open demo unlock link ↗</Link></details>}
-    </div></section></AuthShell>;
+  async function requestUnlock() {
+    if (!validateLogin({ email: values.email, password: 'x' }).email) {
+      setBusy(true);
+      try { setUnlockMessage((await api('/request-unlock', { email: values.email })).message); }
+      catch (error) { setMessage(error.message); }
+      finally { setBusy(false); }
+    } else { setErrors({ email: 'Enter your registered email address.' }); }
+  }
+  return <AuthShell><section className="login-section"><div className="login-copy"><p className="eyebrow">GOOD TO SEE YOU AGAIN</p><h1>Welcome back.</h1><p>Your account, your calendar,<br />and a little room to breathe.</p><span className="decorative-orbit" aria-hidden="true">h.</span></div><div className="form-card"><h2>Sign in to Haven</h2><p className="form-description">Your everyday starts here.</p><Notice>{message}</Notice><form onSubmit={submit} noValidate aria-label="Sign in"><fieldset disabled={busy}><legend className="sr-only">Sign-in credentials</legend><Field name="email" label="Email address" type="email" autoComplete="username" value={values.email} onChange={value => change('email', value)} error={errors.email} placeholder="you@gmail.com" /><Field name="password" label="Password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={values.password} onChange={value => change('password', value)} error={errors.password} placeholder="Enter your password" /><div className="login-options"><label className="checkbox-label"><input type="checkbox" checked={showPassword} onChange={event => setShowPassword(event.target.checked)} />Show password</label></div><button className="button primary full" type="submit">{busy ? 'Signing in…' : 'Sign in'}<span aria-hidden="true">↗</span></button></fieldset></form><p className="helper-note centered">New around here? <Link to="/register">Create an account ↗</Link></p><button className="text-button" disabled={busy} onClick={requestUnlock}>Request an account unlock email</button><Notice type="info">{unlockMessage}</Notice></div></section></AuthShell>;
 }
 
 function EmailVerification() {
-  const { demo, query, updateAccount, setDemo, navigate } = useApp();
-  const emailToken = query.get('token');
-  const pending = demo.accounts.find((account) => account.id === demo.pendingId);
-  const [status, setStatus] = useState(emailToken ? 'processing' : 'pending');
-  const [verifiedAccount, setVerifiedAccount] = useState(null);
-  useEffect(() => {
-    if (!emailToken) { setStatus('pending'); return; }
-    let active = true; setStatus('processing');
-    const timer = setTimeout(() => {
-      if (!active) return;
-      const account = demo.accounts.find((item) => item.emailToken === emailToken);
-      const result = verifyEmail(account, emailToken);
-      if (result.account) { updateAccount(result.account); setDemo((previous) => ({ ...previous, pendingId: account.id })); setVerifiedAccount(result.account); }
-      setStatus(result.status);
-    }, 500);
-    return () => { active = false; clearTimeout(timer); };
-    // The link is processed once per token; changing demo state must not process it again.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emailToken]);
-  const account = verifiedAccount || pending;
-  return <AuthShell step={2}><section className="verification-card form-card"><span className="icon" aria-hidden="true">✉</span><p className="eyebrow">EMAIL VERIFICATION</p>
-    {status === 'processing' ? <><h1>Checking your link.</h1><Notice type="info">Verifying the demo email link…</Notice><div className="loader" aria-hidden="true" /></>
-      : status === 'success' ? <><h1>Email verified.</h1><Notice type="success">Your email address is confirmed in this demo.</Notice><p>Next, verify the six-digit code for your mobile number.</p><button className="button primary full" onClick={() => navigate(account.mobileVerified ? '/login' : '/verify-mobile')}>{account.mobileVerified ? 'Continue to sign in' : 'Continue to mobile verification'} ↗</button></>
-        : status === 'invalid' || status === 'expired' ? <><h1>{status === 'expired' ? 'This link has expired.' : 'This link is invalid.'}</h1><Notice>{status === 'expired' ? 'Email verification links are valid for 24 hours.' : 'The verification link could not be recognized.'}</Notice><Link className="button outline full" to={pending ? '/verify-email' : '/register'}>{pending ? 'Back to email details' : 'Create an account'} ↗</Link></>
-          : !pending ? <><h1>No email to verify yet.</h1><p>Create an account to start the verification steps.</p><Link className="button primary full" to="/register">Create an account ↗</Link></>
-            : <><h1>Check your inbox.</h1><p>Hi {pending.firstName}, open the verification link for <strong>{pending.email}</strong> to continue.</p><div className="detail-strip">Link expires {formatTime(pending.emailExpiresAt, timeZoneFor(pending))}</div><p className="sample-note">This is a frontend demonstration. Open the email preview below to try the link.</p><details className="demo-preview" open><summary>Demo verification email preview</summary><p><strong>Subject: Action Required: Verify your email address for Haven</strong></p><p>Dear {pending.firstName},</p><p>Thank you for registering with Haven. We are thrilled to welcome you to our community.</p><p>To ensure the security of your account and complete your registration, please verify your email address by clicking the secure link below:</p><Link className="button primary full" to={`/verify-email?token=${pending.emailToken}`}>Verify My Email Address ↗</Link><p>If you did not initiate this request, please disregard this message. This link will expire in 24 hours for your protection.</p><p>Warm regards,<br />The Haven Security Team</p></details></>}
+  const { pending, query, refreshSession, navigate } = useApp();
+  const token = query.get('token');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [resendAt, setResendAt] = useState(0);
+  const [deliveryFailed, setDeliveryFailed] = useState(() => query.get('delivery') === 'failed');
+  const now = useNow();
+  async function verify() {
+    if (busy) return;
+    setBusy(true); setMessage('');
+    try { const result = await api('/verify-email', { token }); await refreshSession(); navigate(result.sms_submitted ? '/verify-mobile' : '/verify-mobile?delivery=failed', true); }
+    catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  }
+  async function resend() {
+    if (busy) return;
+    setBusy(true); setMessage('');
+    try {
+      setMessage((await api('/resend-verification', {})).message); setResendAt(Date.now() + 60000);
+      setDeliveryFailed(false); navigate('/verify-email', true);
+    }
+    catch (error) {
+      setMessage(error.message);
+      if ([502, 503].includes(error.status)) { setDeliveryFailed(true); navigate('/verify-email?delivery=failed', true); }
+      if (error.data?.retryAfter) setResendAt(Date.now() + error.data.retryAfter * 1000);
+    }
+    finally { setBusy(false); }
+  }
+  return <AuthShell step={2}><section className="verification-card form-card"><span className="icon" aria-hidden="true">✉</span><p className="eyebrow">EMAIL VERIFICATION</p>{deliveryFailed && !message && !token && !pending?.emailVerified && <Notice>Your account was created, but the verification email could not be sent. Request another email below.</Notice>}<Notice type={message.includes('requested') ? 'info' : 'error'}>{message}</Notice>
+    {token ? <><h1>Confirm your email.</h1><p>Verify your email address to continue. The secure link is valid for 24 hours.</p><button className="button primary full" onClick={verify} disabled={busy}>{busy ? 'Verifying…' : 'Verify my email address'} ↗</button></>
+      : pending?.emailVerified ? <><h1>Email verified.</h1><Notice type="success">Your email address is confirmed.</Notice><Link className="button primary full" to="/verify-mobile">Continue to mobile verification ↗</Link></>
+        : pending ? <><h1>{deliveryFailed ? 'Email delivery failed.' : 'Check your inbox.'}</h1>{deliveryFailed ? <p>The verification email for <strong>{pending.email}</strong> could not be sent. Your account is saved; request another email below.</p> : <><p>Hi {pending.firstName}, we requested a verification email to <strong>{pending.email}</strong>. Follow its secure link once it arrives.</p><p className="helper-note">Check your spam folder too. The link expires after 24 hours.</p></>}<button className="button outline full" onClick={resend} disabled={busy || now < resendAt}>{busy ? 'Sending…' : now < resendAt ? `Resend in ${countdown(resendAt, now)}` : 'Resend verification email'}</button><button className="text-button resend-button" disabled={busy} onClick={() => refreshSession().catch(error => setMessage(error.message))}>I have verified my email</button></>
+          : <><h1>Continue your registration.</h1><p>Create an account, or sign in to resume verification.</p><Link className="button primary full" to="/register">Create an account ↗</Link></>}
     <Link className="text-link back-link" to="/login">Back to sign in</Link></section></AuthShell>;
 }
 
 function MobileVerification() {
-  const { demo, updateAccount } = useApp();
-  const account = demo.accounts.find((item) => item.id === demo.pendingId);
+  const { pending, query, refreshSession, navigate } = useApp();
   const [code, setCode] = useState('');
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(() => query.get('delivery') === 'failed' ? "Your email is verified, but we couldn't send the SMS code. Please try again later or contact support." : '');
+  const [messageType, setMessageType] = useState('error');
   const [busy, setBusy] = useState(false);
+  const [success, setSuccess] = useState(false);
   const now = useNow();
-  const otp = account?.otp;
-  const expired = otp && now >= otp.expiresAt;
-  const success = account?.mobileVerified;
+  const otp = pending?.otp;
+  const expired = otp?.sent && now >= otp.expiresAt;
   async function submit(event) {
     event.preventDefault(); if (busy) return;
     if (!/^\d{6}$/.test(code)) { setMessage('Enter exactly six numeric digits.'); document.getElementById('otp')?.focus(); return; }
-    setBusy(true); setMessage(''); await pause();
-    const result = verifyOtp(account, code);
-    if (result.account) updateAccount(result.account);
-    setMessage({ invalid: 'That code is incorrect. Please try again.', expired: 'This code has expired. Request a new code.', locked: 'Mobile verification is locked after three incorrect attempts.', missing: 'Start email verification before verifying your mobile.' }[result.status] || '');
-    setBusy(false);
+    setBusy(true); setMessage(''); setMessageType('error');
+    try { await api('/verify-mobile', { code }); setSuccess(true); await refreshSession(); }
+    catch (error) { setMessage(error.message); await refreshSession().catch(() => {}); }
+    finally { setBusy(false); }
   }
   async function resend() {
     if (busy) return;
-    setBusy(true); setMessage(''); await pause();
-    const nextAccount = resendOtp(account);
-    if (nextAccount) { updateAccount(nextAccount); setCode(''); }
-    setBusy(false);
+    setBusy(true); setMessage(''); setMessageType('error');
+    try { const result = await api('/send-mobile-otp', {}); setMessage(result.message); setMessageType('info'); setCode(''); await refreshSession(); navigate('/verify-mobile', true); }
+    catch (error) { setMessage(error.message); setMessageType('error'); await refreshSession().catch(() => {}); }
+    finally { setBusy(false); }
   }
   return <AuthShell step={3}><section className="verification-card form-card"><span className="icon" aria-hidden="true">⌁</span><p className="eyebrow">MOBILE VERIFICATION</p>
-    {!account?.emailVerified || !otp ? <><h1>Verify your email first.</h1><p>Your mobile verification follows email verification.</p><Link className="button primary full" to="/verify-email">Go to email verification ↗</Link></>
-      : success ? <><h1>You’re all set.</h1><Notice type="success">Your mobile number has been verified in this demo.</Notice><p>Your account is ready. Sign in to open your workspace.</p><Link className="button primary full" to="/login">Continue to sign in ↗</Link></>
-        : <><h1>One small step.</h1><p>Enter the six-digit code for {COUNTRIES[account.country].prefix} ••••••{account.mobile.slice(-4)}.</p><Notice>{message || (otp.locked ? 'Mobile verification is locked after three incorrect attempts.' : expired ? 'This code has expired. Request a new code below.' : '')}</Notice><form onSubmit={submit} noValidate aria-label="Mobile verification"><Field name="otp" label="Six-digit verification code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(value) => { setCode(value.replace(/\D/g, '').slice(0, 6)); setMessage(''); }} disabled={busy || otp.locked || expired} placeholder="000000" error={message} /><div className="verification-meta"><span>Expires in <strong role="timer">{countdown(otp.expiresAt, now)}</strong></span><span>{Math.max(0, 3 - otp.attempts)} attempts remaining</span></div><button className="button primary full" type="submit" disabled={busy || otp.locked || expired}>{busy ? 'Verifying…' : 'Verify mobile number'} ↗</button></form><button type="button" className="text-button resend-button" onClick={resend} disabled={busy || otp.locked || now < otp.resendAt}>{busy ? 'Please wait…' : now < otp.resendAt ? `Resend code in ${countdown(otp.resendAt, now)}` : 'Resend code ↗'}</button><p className="sample-note">Code valid until {formatTime(otp.expiresAt, timeZoneFor(account))} ({timeZoneFor(account)}).</p>
-          <details className="demo-preview"><summary>Demo SMS preview</summary><p>Your Haven verification code is <strong className="demo-code">{otp.code}</strong>. Valid for five minutes. No SMS has been sent.</p></details>{otp.locked && <p className="sample-note">The blueprint does not specify OTP lockout recovery. For this demo, register another sample account.</p>}</>}
+    {success || pending?.mobileVerified ? <><h1>You’re all set.</h1><Notice type="success">Your mobile number is verified.</Notice><p>Your account is ready. Sign in to open your workspace.</p><Link className="button primary full" to="/login">Continue to sign in ↗</Link></>
+      : !pending?.emailVerified ? <><h1>Verify your email first.</h1><p>Your mobile verification follows email verification.</p><Link className="button primary full" to="/verify-email">Go to email verification ↗</Link></>
+        : <><h1>One small step.</h1><p>{otp?.sent ? `Enter the six-digit SMS code for the number ending in ${pending.mobile.slice(-4)}.` : `Verify the number ending in ${pending.mobile.slice(-4)} by requesting a six-digit SMS code below.`}</p><Notice type={otp?.locked || expired ? 'error' : messageType}>{otp?.locked ? 'Mobile verification is locked after three incorrect attempts. Contact support.' : message || (expired ? 'This code has expired. Request a new code below.' : '')}</Notice>
+          {otp?.sent && <form onSubmit={submit} noValidate aria-label="Mobile verification"><Field name="otp" label="Six-digit verification code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={value => { setCode(value.replace(/\D/g, '').slice(0, 6)); setMessage(''); }} disabled={busy || otp.locked || expired} placeholder="000000" /><div className="verification-meta"><span>Expires in <strong role="timer">{countdown(otp.expiresAt, now)}</strong></span><span>{otp.attemptsRemaining} attempts remaining</span></div><button className="button primary full" type="submit" disabled={busy || otp.locked || expired}>{busy ? 'Verifying…' : 'Verify mobile number'} ↗</button></form>}
+          <button type="button" className="text-button resend-button" onClick={resend} disabled={busy || otp?.locked || now < (otp?.resendAt || 0)}>{busy ? 'Please wait…' : now < (otp?.resendAt || 0) ? `Resend code in ${countdown(otp.resendAt, now)}` : otp?.sent ? 'Resend code ↗' : 'Send SMS code ↗'}</button>{otp?.sent && <p className="helper-note">Code valid until {formatTime(otp.expiresAt, timeZoneFor(pending))} ({timeZoneFor(pending)}).</p>}</>}
     <Link className="text-link back-link" to="/login">Back to sign in</Link></section></AuthShell>;
 }
 
 function Unlock() {
-  const { demo, query, updateAccount } = useApp();
-  const unlockToken = query.get('token');
-  const account = demo.accounts.find((item) => item.unlockToken === unlockToken && unlockToken);
-  const now = useNow();
-  const [status, setStatus] = useState('');
+  const { query } = useApp();
+  const token = query.get('token');
+  const [unlockAt, setUnlockAt] = useState(null);
+  const [offset, setOffset] = useState(0);
+  const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const waiting = account && now < account.unlockAt;
+  const [success, setSuccess] = useState(false);
+  const now = useNow() + offset;
+  useEffect(() => {
+    let active = true;
+    api('/unlock-status', { token }).then(result => { if (active) { setUnlockAt(result.unlockAt); setOffset(result.serverNow - Date.now()); } }).catch(error => { if (active) setMessage(error.message); });
+    return () => { active = false; };
+  }, [token]);
   async function unlock() {
-    if (busy || waiting) return;
-    setBusy(true); await pause(); const result = unlockAccount(account, unlockToken);
-    if (result.account) updateAccount(result.account);
-    setStatus(result.status); setBusy(false);
+    setBusy(true); setMessage('');
+    try { await api('/unlock-account', { token }); setSuccess(true); window.history.replaceState({}, '', '/unlock-account'); }
+    catch (error) { setMessage(error.message); if (error.data?.retryAfter) setUnlockAt(now + error.data.retryAfter * 1000); }
+    finally { setBusy(false); }
   }
-  return <AuthShell><section className="verification-card form-card"><span className="icon" aria-hidden="true">◇</span><p className="eyebrow">ACCOUNT PROTECTION</p>
-    {status === 'success' ? <><h1>Your account is unlocked.</h1><Notice type="success">You can sign in again in this demo.</Notice><Link className="button primary full" to="/login">Return to sign in ↗</Link></>
-      : !account || status === 'invalid' ? <><h1>This unlock link is invalid.</h1><Notice>Use the unlock link in the demo security email after an account is locked.</Notice><Link className="button outline full" to="/login">Back to sign in ↗</Link></>
-        : <><h1>Let’s take a moment.</h1><p>Your demo account was locked after three unsuccessful sign-in attempts. Wait two minutes before using this unlock link.</p><div className="detail-strip">Unlock available in <strong role="timer">{countdown(account.unlockAt, now)}</strong></div>{!waiting && <Notice type="info">The waiting period has ended. Select Unlock account to continue.</Notice>}<button className="button primary full" disabled={waiting || busy} onClick={unlock}>{busy ? 'Unlocking…' : 'Unlock account'} ↗</button><p className="sample-note">The countdown ending does not automatically unlock your account.</p></>}
+  return <AuthShell><section className="verification-card form-card"><span className="icon" aria-hidden="true">◇</span><p className="eyebrow">ACCOUNT PROTECTION</p><Notice>{message}</Notice>
+    {success ? <><h1>Your account is unlocked.</h1><Notice type="success">Sign in with your password to continue.</Notice><Link className="button primary full" to="/login">Return to sign in ↗</Link></>
+      : <><h1>Let’s take a moment.</h1><p>After three unsuccessful sign-in attempts, wait two minutes before using your account unlock link.</p>{unlockAt !== null && <div className="detail-strip">Unlock available in <strong role="timer">{countdown(unlockAt, now)}</strong></div>}<button className="button primary full" disabled={unlockAt === null || now < unlockAt || busy} onClick={unlock}>{busy ? 'Unlocking…' : 'Unlock account'} ↗</button><Link className="text-link back-link" to="/login">Back to sign in</Link></>}
   </section></AuthShell>;
 }
 
 function Navigation({ onHolidays }) {
-  const { user, path, navigate, setDemo } = useApp();
+  const { user, path, navigate, refreshSession } = useApp();
+  const [logoutError, setLogoutError] = useState('');
   const [menu, setMenu] = useState(false);
   const [profileMenu, setProfileMenu] = useState(false);
   const profileRef = useRef(null);
@@ -256,34 +308,37 @@ function Navigation({ onHolidays }) {
     document.addEventListener('pointerdown', outside); document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
   }, []);
-  function logout() { setDemo((previous) => ({ ...previous, currentId: null, pendingId: null })); navigate('/login', true); }
-  return <header className="navigation"><Brand /><button className="hamburger" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="main-navigation" onClick={() => { setMenu(!menu); setProfileMenu(false); }}><span aria-hidden="true">{menu ? '×' : '☰'}</span></button><nav id="main-navigation" className={menu ? 'is-open' : ''} aria-label="Main navigation"><Link to="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</Link><Link to="/profile" aria-current={path === '/profile' ? 'page' : undefined}>Profile</Link><Link to="/settings" aria-current={path === '/settings' ? 'page' : undefined}>Settings</Link><button className="nav-link" onClick={() => { setMenu(false); onHolidays(); }}>Philippine Holidays <span aria-hidden="true">↗</span></button></nav>
+  async function logout() { try { await api('/logout', {}); await refreshSession(); navigate('/login', true); } catch (error) { setLogoutError(error.message); } }
+  return <header className="navigation"><Brand /><Notice>{logoutError}</Notice><button className="hamburger" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="main-navigation" onClick={() => { setMenu(!menu); setProfileMenu(false); }}><span aria-hidden="true">{menu ? '×' : '☰'}</span></button><nav id="main-navigation" className={menu ? 'is-open' : ''} aria-label="Main navigation"><Link to="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</Link><Link to="/profile" aria-current={path === '/profile' ? 'page' : undefined}>Profile</Link><Link to="/settings" aria-current={path === '/settings' ? 'page' : undefined}>Settings</Link><button className="nav-link" onClick={() => { setMenu(false); onHolidays(); }}>Philippine Holidays <span aria-hidden="true">↗</span></button></nav>
     <div className="profile-control" ref={profileRef}><button className="avatar" aria-label="Open profile menu" aria-expanded={profileMenu} aria-controls="profile-menu" onClick={() => setProfileMenu(!profileMenu)}>{initials(user)}</button>{profileMenu && <div id="profile-menu" className="profile-dropdown"><strong>{fullName(user)}</strong><small>{user.email}</small><Link to="/profile">Your profile</Link><Link to="/settings">Settings</Link><button onClick={logout}>Logout ↗</button></div>}</div>
   </header>;
 }
 
 function Dashboard({ openWorkspace }) {
-  const { user, demo } = useApp();
+  const { user, settings } = useApp();
   const now = useNow();
-  return <><section className="hero"><div className="hero-content"><p className="eyebrow light"><span className="status-dot" />YOUR EVERYDAY, SIMPLIFIED</p><h1>A little space.<br />A clearer day.</h1><p className="hero-description">Welcome home, {user.firstName}.<br />Your account, your calendar, and everything in between.</p><button className="button white" onClick={() => openWorkspace('accounts')}>View More <span aria-hidden="true">↗</span></button></div><div className="hero-bottom"><span>{demo.settings.showTime ? formatTime(now, 'Asia/Manila') : 'Made for the way you move.'}</span><span>PHILIPPINES <i /> ASIA / MANILA · +63</span></div></section>
-    <div className="content"><div className="section-heading"><div><p className="eyebrow">YOUR WORKSPACE</p><h2>A place for everything.</h2></div><DemoNote /></div><section className="overview" aria-label="Workspace overview"><Link to="/profile" className="overview-card"><span className="icon" aria-hidden="true">◎</span><h3>Your profile</h3><p>A few details that make this space yours.</p><span className="card-link">Account details <span aria-hidden="true">↗</span></span></Link><button className="overview-card" onClick={() => openWorkspace('holidays')}><span className="icon" aria-hidden="true">▦</span><h3>Days to look forward to</h3><p>A little room for rest, plans, and new places.</p><span className="card-link">Explore holidays <span aria-hidden="true">↗</span></span></button><Link to="/settings" className="overview-card"><span className="icon" aria-hidden="true">◇</span><h3>Peace of mind</h3><p>Your account security, in one simple view.</p><span className="card-link">Security settings <span aria-hidden="true">↗</span></span></Link></section><Footer /></div></>;
+  return <><section className="hero"><div className="hero-content"><p className="eyebrow light"><span className="status-dot" />YOUR EVERYDAY, SIMPLIFIED</p><h1>A little space.<br />A clearer day.</h1><p className="hero-description">Welcome home, {user.firstName}.<br />Your account, your calendar, and everything in between.</p><button className="button white" onClick={() => openWorkspace('accounts')}>View More <span aria-hidden="true">↗</span></button></div><div className="hero-bottom"><span>{settings.showTime ? formatTime(now, 'Asia/Manila') : 'Made for the way you move.'}</span><span>PHILIPPINES <i /> ASIA / MANILA · +63</span></div></section>
+    <div className="content"><div className="section-heading"><div><p className="eyebrow">YOUR WORKSPACE</p><h2>A place for everything.</h2></div></div><section className="overview" aria-label="Workspace overview"><Link to="/profile" className="overview-card"><span className="icon" aria-hidden="true">◎</span><h3>Your profile</h3><p>A few details that make this space yours.</p><span className="card-link">Account details <span aria-hidden="true">↗</span></span></Link><button className="overview-card" onClick={() => openWorkspace('holidays')}><span className="icon" aria-hidden="true">▦</span><h3>Days to look forward to</h3><p>A little room for rest, plans, and new places.</p><span className="card-link">Explore holidays <span aria-hidden="true">↗</span></span></button><Link to="/settings" className="overview-card"><span className="icon" aria-hidden="true">◇</span><h3>Peace of mind</h3><p>Your account security, in one simple view.</p><span className="card-link">Security settings <span aria-hidden="true">↗</span></span></Link></section><Footer /></div></>;
 }
 
 function Profile() {
   const { user } = useApp();
-  const rows = [['Full name', fullName(user)], ['Birthday', user.birthday], ['Email address', user.email], ['Mobile number', `${COUNTRIES[user.country].prefix} ${user.mobile}`], ['House & street', user.houseStreet], ['City', user.city], ['Province / state', user.region], ['Country', COUNTRIES[user.country].name], ['ZIP / postal code', user.postal]];
+  const rows = [['Full name', fullName(user)], ['Birthday', user.birthday], ['Email address', user.email], ['Mobile number', user.mobile], ['House & street', user.houseStreet], ['City', user.city], ['Province / state', user.region], ['Country', COUNTRIES[user.country].name], ['ZIP / postal code', user.postal]];
   return <div className="inner-page"><p className="eyebrow">YOUR DETAILS</p><h1>Your profile.</h1><p className="page-description">A few details that make this space yours.</p><section className="form-card profile-card"><div className="profile-heading"><span className="large-avatar">{initials(user)}</span><div><h2>{fullName(user)}</h2><div className="badge-row"><span className="badge regular">Email verified</span><span className="badge regular">Mobile verified</span></div></div></div><dl className="detail-list">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section><Footer /></div>;
 }
 
 function Settings() {
-  const { demo, user, setDemo } = useApp();
+  const { settings, user, setSettings } = useApp();
   const [saved, setSaved] = useState(false);
-  return <div className="inner-page"><p className="eyebrow">A LITTLE REASSURANCE</p><h1>Your settings.</h1><p className="page-description">Simple preferences for your everyday.</p><section className="form-card settings-card"><h2>Dashboard preferences</h2><label className="switch-label"><span>Show the current Philippine date and time</span><input type="checkbox" checked={demo.settings.showTime} onChange={(event) => { setDemo((previous) => ({ ...previous, settings: { ...previous.settings, showTime: event.target.checked } })); setSaved(true); }} /></label>{saved && <Notice type="success">Preference saved for this browser tab.</Notice>}<hr /><h2>Account security</h2><dl className="detail-list"><div><dt>Email verification</dt><dd>{user.emailVerified ? 'Verified' : 'Pending'}</dd></div><div><dt>Mobile verification</dt><dd>{user.mobileVerified ? 'Verified' : 'Pending'}</dd></div><div><dt>Display time zone</dt><dd>{timeZoneFor(user)}</dd></div></dl><p className="sample-note">Verification and sessions are frontend simulations. No live authentication service is connected.</p></section><Footer /></div>;
+  return <div className="inner-page"><p className="eyebrow">A LITTLE REASSURANCE</p><h1>Your settings.</h1><p className="page-description">Simple preferences for your everyday.</p><section className="form-card settings-card"><h2>Dashboard preferences</h2><label className="switch-label"><span>Show the current Philippine date and time</span><input type="checkbox" checked={settings.showTime} onChange={event => { setSettings({ showTime: event.target.checked }); setSaved(true); }} /></label>{saved && <Notice type="success">Display preference saved.</Notice>}<hr /><h2>Account security</h2><dl className="detail-list"><div><dt>Email verification</dt><dd>{user.emailVerified ? 'Verified' : 'Pending'}</dd></div><div><dt>Mobile verification</dt><dd>{user.mobileVerified ? 'Verified' : 'Pending'}</dd></div><div><dt>Display time zone</dt><dd>{timeZoneFor(user)}</dd></div></dl></section><Footer /></div>;
 }
 
 function Accounts() {
-  const { user } = useApp();
-  return <><div className="subheading"><div><h3>People in your space</h3><p>Your accessible account.</p></div><span className="small-note">1 account</span></div><div className="table-scroll"><table><caption className="sr-only">Accounts available in your workspace</caption><thead><tr><th scope="col">Name</th><th scope="col">Email address</th><th scope="col">Status</th><th scope="col">Role</th></tr></thead><tbody><tr><td><span className="person-avatar" aria-hidden="true">{initials(user)}</span>{fullName(user)}</td><td>{user.email}</td><td><span className="badge regular">Verified</span></td><td>Member</td></tr></tbody></table></div><p className="sample-note">This demo displays your own account. Other registered demo accounts are not listed.</p></>;
+  const [accounts, setAccounts] = useState([]);
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  useEffect(() => { let active = true; api('/accounts').then(result => { if (active) setAccounts(result.accounts); }).catch(error => { if (active) setMessage(error.message); }).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, []);
+  return <><div className="subheading"><div><h3>People in your space</h3><p>Your accessible accounts.</p></div><span className="small-note">{accounts.length} account{accounts.length !== 1 ? 's' : ''}</span></div><Notice>{message}</Notice>{loading ? <p role="status">Loading accounts…</p> : <div className="table-scroll"><table><caption className="sr-only">Accounts available in your workspace</caption><thead><tr><th scope="col">Name</th><th scope="col">Email address</th><th scope="col">Status</th><th scope="col">Role</th></tr></thead><tbody>{accounts.map(account => <tr key={account.id}><td><span className="person-avatar" aria-hidden="true">{initials(account)}</span>{fullName(account)}</td><td>{account.email}</td><td><span className="badge regular">Verified</span></td><td>Member</td></tr>)}</tbody></table></div>}</>;
 }
 
 function HolidayBadges({ holiday }) { return <div className="badge-row">{holiday.categories.map((category) => <span key={category} className={`badge ${category}`}>{CATEGORIES[category].badge}</span>)}</div>; }
@@ -294,10 +349,18 @@ function Holidays() {
   const [month, setMonth] = useState(Number(new Intl.DateTimeFormat('en', { month: 'numeric', timeZone: 'Asia/Manila' }).format(new Date())) - 1);
   const [category, setCategory] = useState('all');
   const [selectedDate, setSelectedDate] = useState('');
-  const [viewState, setViewState] = useState('success');
-  const [loading, setLoading] = useState(false);
-  useEffect(() => { setLoading(true); const timer = setTimeout(() => setLoading(false), 350); return () => clearTimeout(timer); }, [year, viewState]);
-  const holidays = viewState === 'empty' ? [] : previewHolidays(year);
+  const [holidays, setHolidays] = useState([]);
+  const [source, setSource] = useState('');
+  const [requestError, setRequestError] = useState('');
+  const [retry, setRetry] = useState(0);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setRequestError(''); setHolidays([]);
+    api(`/holidays/${year}`, undefined, { signal: controller.signal }).then(result => { setHolidays(result.holidays); setSource(result.source); }).catch(error => { if (error.name !== 'AbortError') setRequestError(error.message); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [year, retry]);
+
   const visible = holidays.filter((holiday) => (category === 'all' || holiday.categories.includes(category)) && (!selectedDate || holiday.date === selectedDate));
   const activeHolidays = holidays.filter((holiday) => category === 'all' || holiday.categories.includes(category));
   function selectYear(value) { setYear(Number(value)); setSelectedDate(''); }
@@ -310,16 +373,16 @@ function Holidays() {
     setSelectedDate('');
   }
   return <><div className="subheading"><div><h3>A pause in the calendar.</h3><p>Philippines · Asia/Manila · +63</p></div><label className="year-label" htmlFor="holiday-year">Year<select id="holiday-year" value={year} onChange={(event) => selectYear(event.target.value)}>{YEARS.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-    <Notice type="info">Sample calendar for {year}. These are illustrative entries, not the official holiday list. No holiday API is connected; Islamic holiday dates await official confirmation.</Notice>
-    <div className="holiday-controls"><label htmlFor="holiday-category">Category<select id="holiday-category" value={category} onChange={(event) => { setCategory(event.target.value); setSelectedDate(''); }}><option value="all">All categories</option>{Object.entries(CATEGORIES).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}</select></label><details className="preview-controls"><summary>Preview display states</summary><label htmlFor="holiday-preview-state">Demo state<select id="holiday-preview-state" value={viewState} onChange={(event) => { setViewState(event.target.value); setSelectedDate(''); }}><option value="success">Sample results</option><option value="empty">Empty results</option><option value="error">Request error</option></select></label></details></div>
-    {loading ? <div className="loading-state" role="status"><span className="loader" aria-hidden="true" />Loading calendar preview for {year}…</div>
-      : viewState === 'error' ? <div className="empty-state"><Notice>We couldn’t load the holidays. This is a simulated request error.</Notice><button className="button outline" onClick={() => setViewState('success')}>Retry ↗</button></div>
-        : <><div className="calendar"><div className="calendar-heading"><button className="icon-button" aria-label="Previous month" disabled={year === 2020 && month === 0} onClick={() => moveMonth(-1)}>‹</button><div><label className="sr-only" htmlFor="calendar-month">Calendar month</label><select id="calendar-month" value={month} onChange={(event) => selectMonth(event.target.value)}>{MONTHS.map((name, index) => <option key={name} value={index}>{name}</option>)}</select><span>{year}</span></div><button className="icon-button" aria-label="Next month" disabled={year === 2027 && month === 11} onClick={() => moveMonth(1)}>›</button></div><table className="calendar-table"><caption className="sr-only">{MONTHS[month]} {year}, Philippine sample calendar</caption><thead><tr>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <th scope="col" key={day}>{day}</th>)}</tr></thead><tbody>{Array.from({ length: calendarCells(year, month).length / 7 }, (_, row) => <tr key={row}>{calendarCells(year, month).slice(row * 7, row * 7 + 7).map((date, column) => {
+    <p className="helper-note">Philippine public holidays for {year}{source ? ` · Source: ${source}` : ''}.</p>
+    <div className="holiday-controls"><label htmlFor="holiday-category">Category<select id="holiday-category" value={category} onChange={(event) => { setCategory(event.target.value); setSelectedDate(''); }}><option value="all">All categories</option>{Object.entries(CATEGORIES).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}</select></label></div>
+    {loading ? <div className="loading-state" role="status"><span className="loader" aria-hidden="true" />Loading holidays for {year}…</div>
+      : requestError ? <div className="empty-state"><Notice>{requestError}</Notice><button className="button outline" onClick={() => setRetry(value => value + 1)}>Retry ↗</button></div>
+        : <><div className="calendar"><div className="calendar-heading"><button className="icon-button" aria-label="Previous month" disabled={year === 2020 && month === 0} onClick={() => moveMonth(-1)}>‹</button><div><label className="sr-only" htmlFor="calendar-month">Calendar month</label><select id="calendar-month" value={month} onChange={(event) => selectMonth(event.target.value)}>{MONTHS.map((name, index) => <option key={name} value={index}>{name}</option>)}</select><span>{year}</span></div><button className="icon-button" aria-label="Next month" disabled={year === 2027 && month === 11} onClick={() => moveMonth(1)}>›</button></div><table className="calendar-table"><caption className="sr-only">{MONTHS[month]} {year}, Philippine holiday calendar</caption><thead><tr>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <th scope="col" key={day}>{day}</th>)}</tr></thead><tbody>{Array.from({ length: calendarCells(year, month).length / 7 }, (_, row) => <tr key={row}>{calendarCells(year, month).slice(row * 7, row * 7 + 7).map((date, column) => {
           const entries = activeHolidays.filter((holiday) => holiday.date === date);
           const day = date ? Number(date.slice(-2)) : '';
-          return <td key={column}>{date && <button className={`calendar-day ${entries.length ? 'has-holiday' : ''} ${date === selectedDate ? 'is-selected' : ''}`} onClick={() => setSelectedDate(date === selectedDate ? '' : date)} aria-pressed={selectedDate === date} aria-label={`${MONTHS[month]} ${day}, ${year}${entries.length ? `: ${entries.map((holiday) => holiday.name).join(', ')}` : ': no sample holiday'}`}><span>{day}</span>{entries.length > 0 && <span className={`calendar-dot ${entries[0].categories[0]}`} aria-hidden="true" />}</button>}</td>;
+          return <td key={column}>{date && <button className={`calendar-day ${entries.length ? 'has-holiday' : ''} ${date === selectedDate ? 'is-selected' : ''}`} onClick={() => setSelectedDate(date === selectedDate ? '' : date)} aria-pressed={selectedDate === date} aria-label={`${MONTHS[month]} ${day}, ${year}${entries.length ? `: ${entries.map((holiday) => holiday.name).join(', ')}` : ': no holiday'}`}><span>{day}</span>{entries.length > 0 && <span className={`calendar-dot ${entries[0].categories[0]}`} aria-hidden="true" />}</button>}</td>;
         })}</tr>)}</tbody></table><div className="calendar-legend"><span><i className="regular" />Regular</span><span><i className="special" />Special non-working</span><span><i className="islamic" />Islamic</span></div></div>
-          <div className="subheading holiday-list-heading"><h3>{selectedDate ? `Sample holidays on ${selectedDate}` : `Sample holidays · ${year}`}</h3>{selectedDate && <button className="text-button" onClick={() => setSelectedDate('')}>Show all dates</button>}</div>{visible.length ? <div className="holiday-grid">{visible.map((holiday) => <article className="holiday-card" key={holiday.id}><div className="date-block"><span>{holiday.date ? MONTHS[Number(holiday.date.slice(5, 7)) - 1].slice(0, 3).toUpperCase() : 'DATE'}</span><strong>{holiday.date ? holiday.date.slice(-2) : '—'}</strong></div><div><HolidayBadges holiday={holiday} /><h4>{holiday.name}</h4><p>{holiday.date ? 'Illustrative calendar entry' : 'Date awaiting official confirmation'}</p></div></article>)}</div> : <div className="empty-state" role="status">{selectedDate ? 'No sample holidays on this date.' : 'No holidays to display for this selection.'}</div>}</>}
+          <div className="subheading holiday-list-heading"><h3>{selectedDate ? `Holidays on ${selectedDate}` : `Holidays · ${year}`}</h3>{selectedDate && <button className="text-button" onClick={() => setSelectedDate('')}>Show all dates</button>}</div>{visible.length ? <div className="holiday-grid">{visible.map((holiday) => <article className="holiday-card" key={holiday.id}><div className="date-block"><span>{holiday.date ? MONTHS[Number(holiday.date.slice(5, 7)) - 1].slice(0, 3).toUpperCase() : 'DATE'}</span><strong>{holiday.date ? holiday.date.slice(-2) : '—'}</strong></div><div><HolidayBadges holiday={holiday} /><h4>{holiday.name}</h4><p>{'Philippine public holiday'}</p></div></article>)}</div> : <div className="empty-state" role="status">{selectedDate ? 'No holidays on this date.' : 'No holidays to display for this selection.'}</div>}</>}
   </>;
 }
 
@@ -368,30 +431,51 @@ function Workspace({ initialTab, onClose }) {
 
 function NotFound() { return <AuthShell><section className="verification-card form-card"><h1>This page isn’t here.</h1><p>Return to Haven to continue.</p><Link className="button primary full" to="/dashboard">Back to Haven ↗</Link></section></AuthShell>; }
 
+
 export default function App() {
   const route = useRoute();
-  const [demo, setDemo] = useState(null);
+  const [session, setSession] = useState({ user: null, pending: null });
+  const [ready, setReady] = useState(false);
   const [startupError, setStartupError] = useState('');
   const [workspace, setWorkspace] = useState(null);
-  const [storageWarning, setStorageWarning] = useState(false);
-  useEffect(() => { let active = true; initialDemo().then((state) => { if (active) setDemo(state); }).catch(() => { if (active) setStartupError('The frontend demo could not start. Open it through the local Vite server, then reload.'); }); return () => { active = false; }; }, []);
-  useEffect(() => { if (!demo) return; try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(demo)); } catch { setStorageWarning(true); } }, [demo]);
-  const user = demo?.accounts.find((account) => account.id === demo.currentId && account.emailVerified && account.mobileVerified && !account.locked);
+  const [settings, setSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('haven.preferences')) || { showTime: true }; } catch { return { showTime: true }; }
+  });
+  const refreshSession = useCallback(async () => {
+    const result = await api('/session'); setSession(result); setStartupError(''); return result;
+  }, []);
+  useEffect(() => {
+    let active = true;
+    api('/session').then(result => { if (active) setSession(result); }).catch(error => { if (active) setStartupError(error.message); }).finally(() => { if (active) setReady(true); });
+    // Remove browser-only credentials left by earlier versions.
+    try { sessionStorage.removeItem('haven.frontend-demo.v2'); } catch { /* storage is optional */ }
+    return () => { active = false; };
+  }, []);
+  useEffect(() => { try { localStorage.setItem('haven.preferences', JSON.stringify(settings)); } catch { /* display preferences are optional */ } }, [settings]);
+  useEffect(() => {
+    const update = () => refreshSession().catch(error => { setSession({ user: null, pending: null }); setStartupError(error.message); });
+    const timer = setInterval(update, 60000); window.addEventListener('focus', update);
+    return () => { clearInterval(timer); window.removeEventListener('focus', update); };
+  }, [refreshSession]);
+  const { user, pending } = session;
   const protectedRoute = ['/dashboard', '/profile', '/settings'].includes(route.path);
   useEffect(() => {
-    if (!demo) return;
+    if (!ready) return;
     if (route.path === '/') route.navigate(user ? '/dashboard' : '/login', true);
     else if (protectedRoute && !user) route.navigate('/login', true);
     else if (user && ['/login', '/register'].includes(route.path)) route.navigate('/dashboard', true);
-    // Redirect only after the simulated session is restored.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demo?.currentId, Boolean(demo), route.path, Boolean(user)]);
-  useEffect(() => { setWorkspace(route.path === '/dashboard' && route.query.get('workspace') === 'holidays' ? 'holidays' : null); const label = { '/register': 'Create account', '/login': 'Sign in', '/verify-email': 'Verify email', '/verify-mobile': 'Verify mobile', '/unlock-account': 'Unlock account', '/dashboard': 'Dashboard', '/profile': 'Profile', '/settings': 'Settings' }[route.path] || 'Haven'; document.title = `${label} · Haven`; const timer = setTimeout(() => { const heading = document.querySelector('h1'); if (heading && !document.querySelector('[role="dialog"]')) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); } }, 0); return () => clearTimeout(timer); }, [route.location]);
-  function updateAccount(account) { setDemo((previous) => ({ ...previous, accounts: previous.accounts.map((item) => item.id === account.id ? account : item) })); }
+  }, [ready, route.path, Boolean(user)]);
+  useEffect(() => {
+    setWorkspace(route.path === '/dashboard' && route.query.get('workspace') === 'holidays' ? 'holidays' : null);
+    const label = { '/register': 'Create account', '/login': 'Sign in', '/verify-email': 'Verify email', '/verify-mobile': 'Verify mobile', '/unlock-account': 'Unlock account', '/dashboard': 'Dashboard', '/profile': 'Profile', '/settings': 'Settings' }[route.path] || 'Haven';
+    document.title = `${label} · Haven`;
+    const timer = setTimeout(() => { const heading = document.querySelector('h1'); if (heading && !document.querySelector('[role="dialog"]')) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); } }, 0);
+    return () => clearTimeout(timer);
+  }, [route.location]);
   function openHolidays() { if (route.path !== '/dashboard') route.navigate('/dashboard?workspace=holidays'); else setWorkspace('holidays'); }
-  if (!demo) return <main className="startup-screen"><span className="brand">haven.</span>{startupError ? <Notice>{startupError}</Notice> : <div role="status"><div className="loader" aria-hidden="true" />Opening your space…</div>}</main>;
+  if (!ready) return <main className="startup-screen"><span className="brand">haven.</span><div role="status"><div className="loader" aria-hidden="true" />Opening your space…</div></main>;
   let screen;
   if (protectedRoute) screen = user ? <><div id="authenticated-shell"><Navigation onHolidays={openHolidays} /><main id="main-content">{route.path === '/dashboard' ? <Dashboard openWorkspace={setWorkspace} /> : route.path === '/profile' ? <Profile /> : <Settings />}</main></div>{workspace && <Workspace initialTab={workspace} onClose={() => setWorkspace(null)} />}</> : null;
   else screen = { '/register': <Registration />, '/login': <Login />, '/verify-email': <EmailVerification />, '/verify-mobile': <MobileVerification />, '/unlock-account': <Unlock /> }[route.path] || (route.path === '/' ? null : <NotFound />);
-  return <AppContext.Provider value={{ ...route, demo, setDemo, updateAccount, user }}><a className="skip-link" href="#main-content">Skip to content</a>{storageWarning && <Notice type="info">Browser storage is unavailable. Demo changes will last until this page is reloaded.</Notice>}{screen}</AppContext.Provider>;
+  return <AppContext.Provider value={{ ...route, user, pending, refreshSession, settings, setSettings }}><a className="skip-link" href="#main-content">Skip to content</a>{startupError && <Notice>{startupError}</Notice>}{screen}</AppContext.Provider>;
 }

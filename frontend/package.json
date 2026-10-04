@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "start": "vite",
+    "dev": "node ../scripts/dev.cjs",
+    "start": "node ../scripts/dev.cjs",
+    "dev:frontend": "vite",
     "build": "vite build",
     "test": "node --test src/frontend.test.mjs",
     "preview": "vite preview"
@@ -14,6 +15,7 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "dependencies": {
+    "libphonenumber-js": "^1.13.14",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

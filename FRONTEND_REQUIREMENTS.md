@@ -1,14 +1,14 @@
 # Frontend requirements clarified from the pasted blueprint
 
-This document translates the supplied **Comprehensive Application Requirements & Blueprint**, sections 1–6, into implementation instructions. Sections 9–10 now record the implemented frontend and its remaining dependencies. The latest requested delivery scope is **frontend only, with no API integration yet**.
+This document translates the supplied **Comprehensive Application Requirements & Blueprint**, sections 1–6, into implementation instructions. Sections 9–10 now record the implemented frontend and its remaining dependencies. The current delivery scope includes the Express/MariaDB APIs, Resend email delivery, and Infobip 2FA SMS integration.
 
-Every source requirement is mapped individually in section 11. **Documentation coverage and implementation completion are separate:** that mapping confirms the instructions cover the source; section 10 distinguishes completed browser behavior from deferred live services. Suggested routes, the recommended verification sequence, and additional usability behavior are implementation recommendations beyond the source's explicit wording.
+Every source requirement is mapped individually in section 11. **Documentation coverage and implementation completion are separate:** that mapping confirms the instructions cover the source; section 10 distinguishes implemented behavior from remaining provider and deployment setup. Suggested routes, the recommended verification sequence, and additional usability behavior are implementation recommendations beyond the source's explicit wording.
 
 ## 1. Is the current frontend a 1:1 match?
 
 **The frontend now implements the required screens and interactive UI. Full application compliance remains dependent on live services.** Registration, Login, email verification, mobile verification, account unlocking, Dashboard, Profile, and Settings are separate client routes. View More opens a real overlay modal with Accounts and Calendars/Holidays tabs.
 
-Field validation, password suggestions, country-dependent dropdowns and phone prefixes, countdowns, attempt limits, hamburger navigation, profile dropdown, logout, calendar navigation, year selection, category filters, and display states are implemented. Verification, login, and lockout are labelled browser-local demonstrations. Holiday cards are labelled illustrative data. **No API integration or backend has been added**, at the user's explicit request.
+Field validation, password suggestions, country-dependent dropdowns and phone prefixes, countdowns, attempt limits, hamburger navigation, profile dropdown, logout, calendar navigation, year selection, category filters, and display states are implemented. Verification, login, lockout and logout now use server APIs and database state. Holiday requests fetch the selected year from an external provider.
 
 The source specifies fields, behavior, security, and some layout features. It provides no reference screenshot or exact visual design, so “1:1” should mean **each requirement has an implemented, verifiable counterpart**, rather than pixel matching. A numerical completion percentage would require a defined scoring method.
 
@@ -178,13 +178,13 @@ The source does not name an API provider. Select one that covers the required ye
 
 ## 8. Backend, infrastructure, and database dependencies
 
-Source: sections 1(b), 2, 3, and 4. These belong in the full application requirements, but a frontend preview cannot fulfill them by displaying labels or timers.
+Source: sections 1(b), 2, 3, and 4. These belong in the full application requirements, but these must be enforced by the backend as well as represented in the frontend.
 
 | Responsibility | Required implementation |
 | --- | --- |
 | Transport / deployment | Enforce HTTPS with TLS 1.3 for payload submission. |
 | Password storage | Hash on the server using Argon2id or bcrypt with a high work factor; never store plaintext passwords. |
-| Registration rate limit | Enforce at most five registration requests per IP address per hour on the server. |
+| Registration rate limit | Enforce at most five accepted registrations per IP address per hour on the server. Commit the quota with the account so invalid fields, duplicate emails, configuration failures and rolled-back writes do not exhaust it. Also enforce a 60-submission-per-IP burst limit per minute. |
 | CSRF protection | Supply and validate anti-CSRF tokens for registration; the frontend submits the token using the server's contract. |
 | Email and uniqueness | Validate public-provider eligibility and uniqueness against the database. |
 | Verification | Generate and validate email/unlock tokens and SMS OTPs; enforce expiry, attempts, and resend restrictions; dispatch email and SMS. |
@@ -201,61 +201,41 @@ Preserve the supplied data requirements. The spellings below correct obvious tra
 
 The schema alone does not describe storage for every OTP attempt/resend or unlock timing state. Add the server-side state needed to enforce the workflows. The `password_reset` enum value does not by itself specify a password-reset screen or workflow.
 
-## 9. Current frontend audit
+## 9. Current implementation audit
 
-This audit reflects the frontend implementation. Behavior tests and the production build pass. The browser connector has no available browsers, so visual rendering and browser interaction QA are still pending; they are not claimed as verified.
+The frontend build, API behavior tests, provider payload tests and actual MariaDB integration check pass. The SQL integration check rolls back its test data and stubs outbound messages. No browser was available for visual or interaction QA.
 
-| Source requirement | Implemented frontend | Remaining dependency / verification |
+| Requirement | Current implementation | Remaining setup or limitation |
 | --- | --- | --- |
-| Registration → verification → Login → landing | Separate routes with simulated-session guards and browser history. | Live authentication and server authorization. |
-| Registration fields and validation | Required fields, labels, per-field errors, pending submissions, name/initial rules, and password confirmation. | Server repeats validation. |
-| Birthday text input and age 13+ | Strict MM/DD/YYYY, valid dates, no future dates, and exact age boundary. | Server validation. |
-| Public-provider email and uniqueness | Documented provider allowlist and demo duplicate-email errors. | Database uniqueness and complete provider policy. |
-| Country-dependent contact/address | PH/US/GB prefix and phone validation; dependent province/state, city, and postal dropdowns. | Choices are limited, documented fixtures; a full location directory may be added later. |
-| Password suggestion | Cryptographic random selection, 16 characters, all required character groups, and confirmation filled. | Production passwords must still be hashed on the server. |
-| Registration security | No payload is transmitted; demo limits and browser password verifiers are labelled simulations. | HTTPS/TLS 1.3, Argon2id/bcrypt, per-IP registration limit, CSRF, and database. |
-| Email verification and template | Pending, processing, success, invalid, and expired screens; 24-hour demo token; complete email preview. | Secure server tokens and email delivery. |
-| SMS OTP | Six digits, five-minute expiry, three-attempt budget, 60-second resend, lockout, timezone display, and local SMS preview. | SMS delivery and server enforcement. |
-| Login and unlock | Generic credential errors, three consecutive failures, security email preview, two-minute timer, explicit link-based unlocking. | Password-hash comparison, active-account checks, real security email, and server sessions. |
-| Hero and overlay | Responsive high-resolution photo with a dark gradient and left-aligned View More CTA. | Visual readability QA on devices. |
-| Floating navigation | Fixed logo, Dashboard, Profile, Settings, Philippine Holidays, and meaningful separate views. | Browser QA. |
-| Dropdown / Logout / hamburger | Working profile dropdown, demo session logout, and collapsible mobile menu. | Secure server session invalidation. |
-| Overlay modal | View More opens dialog; close button, backdrop, Escape, focus trap/restoration, and scroll locking. | Browser and keyboard QA. |
-| Accounts and tabs | Selected-panel switching and keyboard tabs; only the current demo account is shown. | Authorized account data from the server. |
-| Year range 2020–2027 | Every required year changes calendar cells and sample cards. | Official year-specific API datasets, explicitly deferred. |
-| Integrated calendar | Month navigation, leap-year layout, date selection, category filter, loading/empty/error/retry previews. | Live asynchronous holiday source. |
-| Holiday classifications | Regular, Special Non-Working, and Islamic badges; Islamic entries retain both labels and no invented date. | Official classifications, proclamations, and movable dates. |
-| Responsive support | Mobile-first Grid/Flexbox, stacked forms/cards, scrollable tables/dialogs, tablet/desktop/ultra-wide breakpoints. | Visual testing at device widths. |
+| Registration and validation | Forms call the API; the server repeats validation, hashes passwords with bcrypt work factor 12 and enforces email uniqueness. Address choices include 250 countries/territories and 5,260 subdivisions; cities and postal codes load by selection. Caloocan has 23 labeled ZIP codes. | Postal directories cover 125 countries; other locations use country-format validation. Some subdivisions lack city records. Individual street delivery is not verified. See `backend/ADDRESS_DATA.md`. |
+| Registration security | Signed CSRF tokens, database-backed five-account-per-IP hourly quota committed with account creation, a 60-submission-per-minute burst limit and secure production cookie/HTTPS enforcement. | Production must be deployed using TLS 1.3. |
+| Email verification | Required professional template sent through Resend, hashed one-use token, 24-hour expiry and explicit confirmation before SMS. | General recipient delivery needs a Resend API key and a verified sender domain. The resend.dev test sender only reaches the Resend account email. |
+| Mobile verification | Infobip 2FA request with a six-digit numeric template and SMS-only delivery; database-backed five-minute expiry, three attempts and 60-second resend. | Infobip credentials, application and template must be configured. Free trial supports verified test recipients only; actual handset delivery remains untested. Support recovery is required after OTP lockout. |
+| Login and unlock | Server credential comparison, generic errors, three-failure lockout, Resend security email, two-minute cooldown and one-use unlock link. | Legacy client-supplied hashes cannot be converted without the password. |
+| Sessions and logout | Database-backed tokens in HttpOnly cookies; server logout invalidates the token. | Authenticated sessions last eight hours; pending verification sessions 24 hours. |
+| Landing and navigation | Responsive hero, dark overlay, floating menu, profile dropdown, hamburger and View More modal. | Visual and keyboard browser QA remains pending. |
+| Accounts | API-authorized account data; users see their own accessible account. | No administrator or cross-account permission model is specified. |
+| Holidays | Live year-specific requests for 2020–2027, calendar navigation, filtering and real loading/error/retry states. | Nager.Date's checked 2026 dataset omits Islamic holidays. Calendarific is an optional alternative. Classifications derive from provider names/descriptions. |
 
-Implementation policies are documented in README.md and `frontend/src/validation.mjs`: three supported countries, limited address dropdowns, explicit public-email provider domains, one/two-letter middle initials within two characters, and region-based time zones. Both email and mobile verification are prerequisites in the recommended demo flow. Demo deadlines persist across reloads using sessionStorage; this storage is not a trusted security boundary.
+The system has no seeded sign-in credentials, browser authentication store, exposed verification codes, email/SMS previews or hardcoded holiday fixtures. Browser storage contains display preferences only. The original browser account store is removed once when upgrading.
 
 ## 10. Completion checklist
 
-**Completed frontend work (source implementation and behavior tests; browser QA pending):**
+- [x] Connect Registration, Login, email confirmation, mobile verification, unlock and Logout to APIs.
+- [x] Repeat validation and hash passwords on the server.
+- [x] Store sessions, verification tokens, attempt budgets, cooldowns and registration rate limits in MariaDB.
+- [x] Require signed CSRF tokens and protect authenticated account/holiday endpoints.
+- [x] Implement the professional verification email and security alert using Resend.
+- [x] Request and check SMS through Infobip 2FA, enforcing the source's timing and attempt rules on the server.
+- [x] Replace holiday fixtures with external API fetching and keep all years 2020–2027.
+- [x] Remove sample credentials and verification/holiday preview controls.
+- [x] Verify the production frontend build, API/provider tests and actual MariaDB SQL workflow.
+- [ ] Test SMS delivery to a recipient chosen by the user; the latest Verify permission check passed.
+- [ ] Configure RESEND_API_KEY and a verified Resend sender domain for general registration email delivery.
+- [ ] Configure production HTTPS/TLS 1.3 and conduct browser/device QA.
+- [ ] Use a holiday provider with the required annual coverage and verify classifications against official proclamations.
 
-- [x] Registration and Login are separate screens; a simulated session gates the landing screen.
-- [x] Field validation covers birthday text/age, names/initials, password composition/match, public-provider email, and supported country/address/phone choices.
-- [x] Strong password suggestion generates a compliant password.
-- [x] Forms have working submission, pending, validation, and demo result states.
-- [x] Email verification has a complete professional email preview, 24-hour local link, and pending/processing/success/invalid/expired views.
-- [x] OTP UI provides six digits, five-minute expiry, three attempts, a 60-second resend delay, local deadline persistence, and selected-region time display.
-- [x] Login/unlock UI demonstrates consecutive failures, security email, two-minute waiting period, and explicit unlocking.
-- [x] Landing has the photo/overlay, floating navigation, hamburger, profile dropdown, and working demo Logout.
-- [x] View More opens the closable Accounts and Calendars/Holidays overlay with keyboard tab switching and focus handling.
-- [x] Philippine Holidays navigation opens the holiday tab; all years 2020–2027, an integrated calendar, responsive cards, distinct categories, and display-state previews are implemented.
-- [x] Responsive Grid/Flexbox and mobile/tablet/desktop/ultra-wide rules are implemented.
-- [x] Production build and 11 behavior tests pass.
-
-**Deferred services and remaining verification:**
-
-- [ ] Visual and browser interaction QA across device sizes (no browser available in the connector).
-- [ ] Server-confirmed registration, uniqueness, account status, and authorized account lists.
-- [ ] Live email and SMS delivery with trusted token/OTP expiry, resend, and attempt enforcement.
-- [ ] Real authentication, security alert emails, unlock verification, and secure session invalidation.
-- [ ] Dynamic external API fetching of official Philippine holiday datasets and classifications for the selected year.
-- [ ] Backend, TLS 1.3, password hashing, CSRF, per-IP registration rate limits, and required database schema.
-
-API/backend work is deferred at the user's request. Local demonstrations satisfy the current frontend review scope; they do not fulfill live verification, authentication, security, database, or official holiday-data requirements. Full application compliance must not be claimed yet.
+See README.md, backend/EMAIL_SETUP.md and backend/SMS_SETUP.md for configuration and commands. These remaining provider/deployment items mean full production compliance is not claimed.
 
 ## 11. One-to-one source coverage
 

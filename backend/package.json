@@ -1,16 +1,27 @@
 {
   "name": "haven-eventdriven-main",
   "version": "1.0.0",
-  "description": "A responsive React frontend implementing the screens and browser interactions in [FRONTEND_REQUIREMENTS.md](FRONTEND_REQUIREMENTS.md). **This delivery is frontend-only, with no API integration**, as requested. Authentication, email, SMS, account lockout, and holiday results are clearly labelled local demonstrations.",
-  "main": "index.js",
+  "description": "Haven Express backend with MariaDB registration, Resend verification emails, and Infobip 2FA SMS OTP.",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "email:test": "node email-test.js",
+    "email:check": "node email-check.js",
+    "verify-email:test": "node verify-email-test.js",
+    "sms:test": "node sms-test.js",
+    "sms:check": "node sms-check.js",
+    "providers:check": "node provider-check.js",
+    "db:check": "node check-services.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@countrystatecity/countries": "^1.0.9",
+    "@countrystatecity/postalcodes": "^1.0.2",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.5",
     "express": "^5.2.1",
