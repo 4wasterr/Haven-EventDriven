@@ -1,6 +1,6 @@
 # Frontend requirements clarified from the pasted blueprint
 
-This document translates the supplied **Comprehensive Application Requirements & Blueprint**, sections 1–6, into implementation instructions. Sections 9–10 now record the implemented frontend and its remaining dependencies. The current delivery scope includes the Express/MariaDB APIs, Resend email delivery, and Infobip 2FA SMS integration.
+This document translates the supplied **Comprehensive Application Requirements & Blueprint**, sections 1–6, into implementation instructions. Sections 9–10 record the implementation and remaining configuration. Express/MariaDB handles accounts, Brevo sends email, iProg sends SMS OTPs, and Calendarific supplies Philippine holidays. [REQUIREMENTS_AUDIT.md](REQUIREMENTS_AUDIT.md) records the code and verification evidence.
 
 Every source requirement is mapped individually in section 11. **Documentation coverage and implementation completion are separate:** that mapping confirms the instructions cover the source; section 10 distinguishes implemented behavior from remaining provider and deployment setup. Suggested routes, the recommended verification sequence, and additional usability behavior are implementation recommendations beyond the source's explicit wording.
 
@@ -8,7 +8,7 @@ Every source requirement is mapped individually in section 11. **Documentation c
 
 **The frontend now implements the required screens and interactive UI. Full application compliance remains dependent on live services.** Registration, Login, email verification, mobile verification, account unlocking, Dashboard, Profile, and Settings are separate client routes. View More opens a real overlay modal with Accounts and Calendars/Holidays tabs.
 
-Field validation, password suggestions, country-dependent dropdowns and phone prefixes, countdowns, attempt limits, hamburger navigation, profile dropdown, logout, calendar navigation, year selection, category filters, and display states are implemented. Verification, login, lockout and logout now use server APIs and database state. Holiday requests fetch the selected year from an external provider.
+Field validation, password suggestions, country-dependent dropdowns and phone prefixes, countdowns, attempt limits, hamburger navigation, profile dropdown, logout, calendar navigation, year selection, category filters, and display states are implemented. Verification, login, lockout and logout use local server APIs and database state. Brevo provides registration emails, email verification, unlock alerts, and a protected `/send-email` form. iProg delivers Haven's random six-digit OTPs. Calendarific supplies classified Philippine holidays when its server-side key is configured.
 
 The source specifies fields, behavior, security, and some layout features. It provides no reference screenshot or exact visual design, so “1:1” should mean **each requirement has an implemented, verifiable counterpart**, rather than pixel matching. A numerical completion percentage would require a defined scoring method.
 
@@ -85,7 +85,7 @@ The required email content, with the pasted formatting cleaned up, is:
 
 > **Subject:** Action Required: Verify your email address for [Application Name]
 >
-> Dear [First Name],
+> Dear: [First Name]
 >
 > Thank you for registering with [Application Name]. We are thrilled to welcome you to our community.
 >
@@ -107,7 +107,9 @@ The required email content, with the pasted formatting cleaned up, is:
 - Allow at most **three entry attempts** before lockout. The server owns the attempt counter and lockout decision.
 - Disable Resend OTP for **60 seconds**, then enable it. Use server-issued timing information so refreshing the page does not bypass the restriction.
 - Show invalid-code, expired-code, locked, resend-pending, and success states.
-- Format mobile-verification date/time displays for the selected country's time zone; use **Asia/Manila** for the Philippines. OTP expiry is an elapsed five-minute interval. The source does not specify the exact display format or how to select a time zone for countries with multiple zones; document that selection policy separately.
+- Format the SMS expiry and mobile-verification date/time displays for the selected country's time zone; use **Asia/Manila** for the Philippines. OTP expiry is five elapsed minutes. The source does not specify the exact display format or how to select a time zone for countries with multiple zones; document that selection policy separately.
+
+The implemented SMS body is `Haven`, `Your OTP is <six random digits>`, followed by `Expires at <localized date/time> (<time zone>). Valid for 5 minutes.` The SMS and UI use the selected province/state's time zone when available, otherwise the registered country's default zone. Both use the same persisted UTC deadline. The sender name shown by the phone requires approval of Haven in the iProg account.
 
 The source does not specify the duration or recovery process for an OTP lockout. Do not assume the login unlock email also handles OTP lockout.
 
@@ -184,7 +186,7 @@ Source: sections 1(b), 2, 3, and 4. These belong in the full application require
 | --- | --- |
 | Transport / deployment | Enforce HTTPS with TLS 1.3 for payload submission. |
 | Password storage | Hash on the server using Argon2id or bcrypt with a high work factor; never store plaintext passwords. |
-| Registration rate limit | Enforce at most five accepted registrations per IP address per hour on the server. Commit the quota with the account so invalid fields, duplicate emails, configuration failures and rolled-back writes do not exhaust it. Also enforce a 60-submission-per-IP burst limit per minute. |
+| Registration rate limit | Enforce at most five registration requests per IP address per hour. Count invalid fields, malformed JSON, duplicates, configuration failures and rolled-back writes. Persist the quota separately from account creation. Reject missing/invalid CSRF before consuming the quota. |
 | CSRF protection | Supply and validate anti-CSRF tokens for registration; the frontend submits the token using the server's contract. |
 | Email and uniqueness | Validate public-provider eligibility and uniqueness against the database. |
 | Verification | Generate and validate email/unlock tokens and SMS OTPs; enforce expiry, attempts, and resend restrictions; dispatch email and SMS. |
@@ -203,41 +205,44 @@ The schema alone does not describe storage for every OTP attempt/resend or unloc
 
 ## 9. Current implementation audit
 
-The frontend build, API behavior tests, provider payload tests and actual MariaDB integration check pass. The SQL integration check rolls back its test data and stubs outbound messages. No browser was available for visual or interaction QA.
+Current verification passes: 67 backend tests including the rolled-back actual MariaDB workflow, 16 frontend tests and the production build. Outbound message delivery is simulated in tests. Native computer-use is unavailable and browser inventory is empty, so browser/device QA remains pending. The [one-to-one check](REQUIREMENTS_1_TO_1_CHECK_2026-10-06.md) records one assessment for each of the 75 source items.
 
 | Requirement | Current implementation | Remaining setup or limitation |
 | --- | --- | --- |
 | Registration and validation | Forms call the API; the server repeats validation, hashes passwords with bcrypt work factor 12 and enforces email uniqueness. Address choices include 250 countries/territories and 5,260 subdivisions; cities and postal codes load by selection. Caloocan has 23 labeled ZIP codes. | Postal directories cover 125 countries; other locations use country-format validation. Some subdivisions lack city records. Individual street delivery is not verified. See `backend/ADDRESS_DATA.md`. |
-| Registration security | Signed CSRF tokens, database-backed five-account-per-IP hourly quota committed with account creation, a 60-submission-per-minute burst limit and secure production cookie/HTTPS enforcement. | Production must be deployed using TLS 1.3. |
-| Email verification | Required professional template sent through Resend, hashed one-use token, 24-hour expiry and explicit confirmation before SMS. | General recipient delivery needs a Resend API key and a verified sender domain. The resend.dev test sender only reaches the Resend account email. |
-| Mobile verification | Infobip 2FA request with a six-digit numeric template and SMS-only delivery; database-backed five-minute expiry, three attempts and 60-second resend. | Infobip credentials, application and template must be configured. Free trial supports verified test recipients only; actual handset delivery remains untested. Support recovery is required after OTP lockout. |
-| Login and unlock | Server credential comparison, generic errors, three-failure lockout, Resend security email, two-minute cooldown and one-use unlock link. | Legacy client-supplied hashes cannot be converted without the password. |
+| Registration security | Signed CSRF tokens, database-backed five-request-per-IP hourly limit that retains failed attempts, countdown feedback, and production TLS 1.3 enforcement before payload parsing. | Production needs certificates or a trusted TLS 1.3 proxy, HTTPS origin and persistent strong CSRF secret. Loopback development uses HTTP. |
+| Email verification | Brevo sends 24-hour verification links; confirmation requires the emailed token and then requests SMS OTP delivery. | Configure a Brevo API key and verified sender, plus iProg SMS credentials. |
+| Mobile verification | Haven generates six random digits, stores a salted hash and validates locally; iProg sends SMS. Five-minute expiry, three incorrect attempts and 60-second resend are enforced in MariaDB. | Configure `IPROG_API_TOKEN` and approve the Haven sender name in iProg. Philippine delivery is documented by iProg; international delivery remains unverified. |
+| Login and unlock | Lock and email/active eligibility checks precede stored-hash comparison; unverified-email rejections leave failure counters and sessions unchanged. Generic credential errors, three-failure lockout, Brevo unlock alerts, two-minute cooldown and one-use tokens. | Live alert receipt remains unverified; active eligibility uses lock/verification state because no separate is_active field is specified. |
 | Sessions and logout | Database-backed tokens in HttpOnly cookies; server logout invalidates the token. | Authenticated sessions last eight hours; pending verification sessions 24 hours. |
 | Landing and navigation | Responsive hero, dark overlay, floating menu, profile dropdown, hamburger and View More modal. | Visual and keyboard browser QA remains pending. |
 | Accounts | API-authorized account data; users see their own accessible account. | No administrator or cross-account permission model is specified. |
-| Holidays | Live year-specific requests for 2020–2027, calendar navigation, filtering and real loading/error/retry states. | Nager.Date's checked 2026 dataset omits Islamic holidays. Calendarific is an optional alternative. Classifications derive from provider names/descriptions. |
+| Holidays | Authenticated Calendarific requests for 2020–2027, provider-based regular/special classification, Islamic badges, responsive calendar/cards, attribution and unavailable/retry states. No local holiday datasets. | `CALENDARIFIC_API_KEY` is not configured locally, so live fetching and current dataset coverage remain unverified. Future dates depend on official announcements and provider updates. |
 
 The system has no seeded sign-in credentials, browser authentication store, exposed verification codes, email/SMS previews or hardcoded holiday fixtures. Browser storage contains display preferences only. The original browser account store is removed once when upgrading.
 
 ## 10. Completion checklist
 
-- [x] Connect Registration, Login, email confirmation, mobile verification, unlock and Logout to APIs.
+- [x] Keep local account routes, server validation, password hashing and MariaDB state.
 - [x] Repeat validation and hash passwords on the server.
 - [x] Store sessions, verification tokens, attempt budgets, cooldowns and registration rate limits in MariaDB.
 - [x] Require signed CSRF tokens and protect authenticated account/holiday endpoints.
-- [x] Implement the professional verification email and security alert using Resend.
-- [x] Request and check SMS through Infobip 2FA, enforcing the source's timing and attempt rules on the server.
-- [x] Replace holiday fixtures with external API fetching and keep all years 2020–2027.
+- [x] Connect Brevo for verification links, unlock alerts and the protected Send email form.
+- [x] Connect iProg SMS to the random six-digit OTP flow and enforce expiry, attempts, resend cooldown and single use locally.
+- [x] Show unavailable states when an integration is unconfigured or fails.
+- [x] Keep address snapshots and the dashboard image local.
 - [x] Remove sample credentials and verification/holiday preview controls.
-- [x] Verify the production frontend build, API/provider tests and actual MariaDB SQL workflow.
-- [ ] Test SMS delivery to a recipient chosen by the user; the latest Verify permission check passed.
-- [ ] Configure RESEND_API_KEY and a verified Resend sender domain for general registration email delivery.
+- [x] Connect Calendarific Philippine holidays and test year requests, classifications and failure handling.
+- [ ] Configure `CALENDARIFIC_API_KEY` and verify live 2020–2027 datasets.
 - [ ] Configure production HTTPS/TLS 1.3 and conduct browser/device QA.
-- [ ] Use a holiday provider with the required annual coverage and verify classifications against official proclamations.
+- [x] Check the live Brevo verified sender and iProg account without sending messages.
+- [ ] Verify real email/SMS delivery and iProg sender approval in the user's own registration flow.
 
-See README.md, backend/EMAIL_SETUP.md and backend/SMS_SETUP.md for configuration and commands. These remaining provider/deployment items mean full production compliance is not claimed.
+See README.md for configuration and checks. Email and SMS account checks passed; no real messages were sent. Holiday code is implemented, but its key is still needed. No browser is connected for device and keyboard QA.
 
 ## 11. One-to-one source coverage
+
+Current implementation assessment: [75-item one-to-one check](REQUIREMENTS_1_TO_1_CHECK_2026-10-06.md). All 75 recorded IDs have exactly one assessment; partial/unverified rows remain open. The recorded expired_at spelling is normalized to expires_at in the implementation and is flagged for literal grading.
 
 **Every source entry containing a substantive requirement is covered below.** Parent entries are included when they contain instructions in addition to their numbered children, and section 2(b)'s complete email template has its own row. This is a documentation coverage check, not a claim that the application passes implementation checks. Section references point to this document. Backend-only items are retained as dependencies rather than silently omitted from the frontend instructions.
 

@@ -17,7 +17,7 @@ async function start() {
         await ensureSchema(db);
         const app = createApp({ db });
         const server = tls ? https.createServer({ cert: fs.readFileSync(process.env.TLS_CERT_FILE),
-            key: fs.readFileSync(process.env.TLS_KEY_FILE), minVersion: 'TLSv1.3' }, app) : require('http').createServer(app);
+            key: fs.readFileSync(process.env.TLS_KEY_FILE), minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' }, app) : require('http').createServer(app);
         server.on('error', error => { console.error(`Backend startup failed: ${error.code || error.message}`); db.end(); process.exitCode = 1; });
         server.listen(PORT, process.env.HOST || '127.0.0.1', () => console.log(`Haven running on ${tls ? 'https' : 'http'}://localhost:${PORT}`));
         const stop = () => server.close(() => db.end().then(() => process.exit(0)));

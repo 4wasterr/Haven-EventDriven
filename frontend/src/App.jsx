@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { COUNTRIES, passwordRules, suggestPassword, validateLogin, validateRegistration } from './validation.mjs';
+import { COUNTRIES, manilaToday, passwordRules, suggestPassword, validateLogin, validateRegistration } from './validation.mjs';
 import { countdown, formatTime, timeZoneFor } from './format.mjs';
 import { api } from './api.mjs';
 import { CATEGORIES, YEARS, calendarCells } from './calendar.mjs';
+import EmailForm from './EmailForm.jsx';
 
 const AppContext = createContext(null);
 const useApp = () => useContext(AppContext);
@@ -96,13 +97,16 @@ function useAddressChoices(country, region, city) {
 }
 
 function Registration() {
-  const { refreshSession, navigate } = useApp();
+  const { refreshSession, navigate, services } = useApp();
+  const registrationAvailable = services.email;
   const [values, setValues] = useState({ firstName: '', lastName: '', middleInitial: '', birthday: '', email: '', mobile: '', houseStreet: '', country: 'PH', region: '', city: '', postal: '', password: '', confirmPassword: '' });
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [generated, setGenerated] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const now = useNow();
   const country = COUNTRIES[values.country];
   const region = country?.regions[values.region];
   const address = useAddressChoices(values.country, values.region, values.city);
@@ -117,8 +121,8 @@ function Registration() {
   const field = (name, label, props = {}) => <Field name={name} label={label} value={values[name]} onChange={(value) => change(name, value)} error={errors[name]} {...props} />;
   async function submit(event) {
     event.preventDefault();
-    if (busy) return;
-    const nextErrors = validateRegistration(values, new Date(), { cities: address.cities, postalMode: address.postal.mode, postalCodes: address.postal.options });
+    if (busy || now < retryAt) return;
+    const nextErrors = validateRegistration(values, manilaToday(), { cities: address.cities, postalMode: address.postal.mode, postalCodes: address.postal.options });
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length) { setMessage('Please correct the highlighted fields.'); focusError(nextErrors); return; }
     setBusy(true); setMessage('');
@@ -128,6 +132,7 @@ function Registration() {
       navigate(result.email_submitted ? '/verify-email' : '/verify-email?delivery=failed');
     } catch (error) {
       setMessage(error.message);
+      if (error.status === 429 && error.data?.retryAfter) setRetryAt(Date.now() + error.data.retryAfter * 1000);
       if (error.data?.errors) { setErrors(error.data.errors); focusError(error.data.errors); }
     } finally { setBusy(false); }
   }
@@ -159,13 +164,15 @@ function Registration() {
         <ul className="password-rules" aria-label="Password requirements">{passwordRules(values.password).map((rule) => <li key={rule.label} className={rule.valid ? 'met' : ''}><span aria-hidden="true">{rule.valid ? '✓' : '○'}</span><span className="sr-only">{rule.valid ? 'Met: ' : 'Required: '}</span>{rule.label}</li>)}</ul>
         <div className="password-tools"><button type="button" className="text-button" onClick={suggest}>Suggest a strong password ↗</button><label className="checkbox-label"><input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} />Show passwords</label></div>
         {generated && <p className="suggested-password" role="status">Suggested password: <strong>{generated}</strong><br />Both password fields have been filled.</p>}
-        <button className="button primary full" type="submit">{busy ? 'Creating account…' : 'Create account'}<span aria-hidden="true">↗</span></button>
+        {!registrationAvailable && <Notice type="info">New registrations are temporarily unavailable while email verification is offline.</Notice>}
+        {registrationAvailable && !services.sms && <Notice type="info">You can register and verify your email. Mobile verification is temporarily paused.</Notice>}
+        <button className="button primary full" type="submit" disabled={!registrationAvailable || now < retryAt}>{busy ? 'Creating account…' : now < retryAt ? `Try again in ${countdown(retryAt, now)}` : 'Create account'}<span aria-hidden="true">↗</span></button>
       </fieldset></form>
     </div></section></AuthShell>;
 }
 
 function Login() {
-  const { refreshSession, navigate } = useApp();
+  const { refreshSession, navigate, services } = useApp();
   const [values, setValues] = useState({ email: '', password: '' });
   const [errors, setErrors] = useState({});
   const [message, setMessage] = useState('');
@@ -190,11 +197,11 @@ function Login() {
       finally { setBusy(false); }
     } else { setErrors({ email: 'Enter your registered email address.' }); }
   }
-  return <AuthShell><section className="login-section"><div className="login-copy"><p className="eyebrow">GOOD TO SEE YOU AGAIN</p><h1>Welcome back.</h1><p>Your account, your calendar,<br />and a little room to breathe.</p><span className="decorative-orbit" aria-hidden="true">h.</span></div><div className="form-card"><h2>Sign in to Haven</h2><p className="form-description">Your everyday starts here.</p><Notice>{message}</Notice><form onSubmit={submit} noValidate aria-label="Sign in"><fieldset disabled={busy}><legend className="sr-only">Sign-in credentials</legend><Field name="email" label="Email address" type="email" autoComplete="username" value={values.email} onChange={value => change('email', value)} error={errors.email} placeholder="you@gmail.com" /><Field name="password" label="Password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={values.password} onChange={value => change('password', value)} error={errors.password} placeholder="Enter your password" /><div className="login-options"><label className="checkbox-label"><input type="checkbox" checked={showPassword} onChange={event => setShowPassword(event.target.checked)} />Show password</label></div><button className="button primary full" type="submit">{busy ? 'Signing in…' : 'Sign in'}<span aria-hidden="true">↗</span></button></fieldset></form><p className="helper-note centered">New around here? <Link to="/register">Create an account ↗</Link></p><button className="text-button" disabled={busy} onClick={requestUnlock}>Request an account unlock email</button><Notice type="info">{unlockMessage}</Notice></div></section></AuthShell>;
+  return <AuthShell><section className="login-section"><div className="login-copy"><p className="eyebrow">GOOD TO SEE YOU AGAIN</p><h1>Welcome back.</h1><p>Your account, your calendar,<br />and a little room to breathe.</p><span className="decorative-orbit" aria-hidden="true">h.</span></div><div className="form-card"><h2>Sign in to Haven</h2><p className="form-description">Your everyday starts here.</p><Notice>{message}</Notice><form onSubmit={submit} noValidate aria-label="Sign in"><fieldset disabled={busy}><legend className="sr-only">Sign-in credentials</legend><Field name="email" label="Email address" type="email" autoComplete="username" value={values.email} onChange={value => change('email', value)} error={errors.email} placeholder="you@gmail.com" /><Field name="password" label="Password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={values.password} onChange={value => change('password', value)} error={errors.password} placeholder="Enter your password" /><div className="login-options"><label className="checkbox-label"><input type="checkbox" checked={showPassword} onChange={event => setShowPassword(event.target.checked)} />Show password</label></div><button className="button primary full" type="submit">{busy ? 'Signing in…' : 'Sign in'}<span aria-hidden="true">↗</span></button></fieldset></form><p className="helper-note centered">New around here? <Link to="/register">Create an account ↗</Link></p><button className="text-button" disabled={busy || !services.email} onClick={requestUnlock}>Request an account unlock email</button><Notice type="info">{services.email ? unlockMessage : "Account unlock emails are temporarily unavailable. Please try again later."}</Notice></div></section></AuthShell>;
 }
 
 function EmailVerification() {
-  const { pending, query, refreshSession, navigate } = useApp();
+  const { pending, query, refreshSession, navigate, services } = useApp();
   const token = query.get('token');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -222,6 +229,7 @@ function EmailVerification() {
     }
     finally { setBusy(false); }
   }
+  if (!services.email && !pending?.emailVerified) return <AuthShell step={2}><section className="verification-card form-card"><p className="eyebrow">EMAIL VERIFICATION</p><h1>Verification is paused.</h1><Notice type="info">Email verification is temporarily unavailable. Please return later to continue.</Notice>{pending && <p>Your account details are saved.</p>}<Link className="text-link back-link" to="/login">Back to sign in</Link></section></AuthShell>;
   return <AuthShell step={2}><section className="verification-card form-card"><span className="icon" aria-hidden="true">✉</span><p className="eyebrow">EMAIL VERIFICATION</p>{deliveryFailed && !message && !token && !pending?.emailVerified && <Notice>Your account was created, but the verification email could not be sent. Request another email below.</Notice>}<Notice type={message.includes('requested') ? 'info' : 'error'}>{message}</Notice>
     {token ? <><h1>Confirm your email.</h1><p>Verify your email address to continue. The secure link is valid for 24 hours.</p><button className="button primary full" onClick={verify} disabled={busy}>{busy ? 'Verifying…' : 'Verify my email address'} ↗</button></>
       : pending?.emailVerified ? <><h1>Email verified.</h1><Notice type="success">Your email address is confirmed.</Notice><Link className="button primary full" to="/verify-mobile">Continue to mobile verification ↗</Link></>
@@ -231,7 +239,7 @@ function EmailVerification() {
 }
 
 function MobileVerification() {
-  const { pending, query, refreshSession, navigate } = useApp();
+  const { pending, query, refreshSession, navigate, services } = useApp();
   const [code, setCode] = useState('');
   const [message, setMessage] = useState(() => query.get('delivery') === 'failed' ? "Your email is verified, but we couldn't send the SMS code. Please try again later or contact support." : '');
   const [messageType, setMessageType] = useState('error');
@@ -255,12 +263,13 @@ function MobileVerification() {
     catch (error) { setMessage(error.message); setMessageType('error'); await refreshSession().catch(() => {}); }
     finally { setBusy(false); }
   }
+  if (!services.sms && !otp?.sent && pending?.emailVerified && !pending.mobileVerified) return <AuthShell step={3}><section className="verification-card form-card"><p className="eyebrow">MOBILE VERIFICATION</p><h1>Verification is paused.</h1><Notice type="info">Mobile verification is temporarily unavailable. Please return later to continue.</Notice><p>Your account details are saved.</p><Link className="text-link back-link" to="/login">Back to sign in</Link></section></AuthShell>;
   return <AuthShell step={3}><section className="verification-card form-card"><span className="icon" aria-hidden="true">⌁</span><p className="eyebrow">MOBILE VERIFICATION</p>
     {success || pending?.mobileVerified ? <><h1>You’re all set.</h1><Notice type="success">Your mobile number is verified.</Notice><p>Your account is ready. Sign in to open your workspace.</p><Link className="button primary full" to="/login">Continue to sign in ↗</Link></>
       : !pending?.emailVerified ? <><h1>Verify your email first.</h1><p>Your mobile verification follows email verification.</p><Link className="button primary full" to="/verify-email">Go to email verification ↗</Link></>
         : <><h1>One small step.</h1><p>{otp?.sent ? `Enter the six-digit SMS code for the number ending in ${pending.mobile.slice(-4)}.` : `Verify the number ending in ${pending.mobile.slice(-4)} by requesting a six-digit SMS code below.`}</p><Notice type={otp?.locked || expired ? 'error' : messageType}>{otp?.locked ? 'Mobile verification is locked after three incorrect attempts. Contact support.' : message || (expired ? 'This code has expired. Request a new code below.' : '')}</Notice>
           {otp?.sent && <form onSubmit={submit} noValidate aria-label="Mobile verification"><Field name="otp" label="Six-digit verification code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={value => { setCode(value.replace(/\D/g, '').slice(0, 6)); setMessage(''); }} disabled={busy || otp.locked || expired} placeholder="000000" /><div className="verification-meta"><span>Expires in <strong role="timer">{countdown(otp.expiresAt, now)}</strong></span><span>{otp.attemptsRemaining} attempts remaining</span></div><button className="button primary full" type="submit" disabled={busy || otp.locked || expired}>{busy ? 'Verifying…' : 'Verify mobile number'} ↗</button></form>}
-          <button type="button" className="text-button resend-button" onClick={resend} disabled={busy || otp?.locked || now < (otp?.resendAt || 0)}>{busy ? 'Please wait…' : now < (otp?.resendAt || 0) ? `Resend code in ${countdown(otp.resendAt, now)}` : otp?.sent ? 'Resend code ↗' : 'Send SMS code ↗'}</button>{otp?.sent && <p className="helper-note">Code valid until {formatTime(otp.expiresAt, timeZoneFor(pending))} ({timeZoneFor(pending)}).</p>}</>}
+          <button type="button" className="text-button resend-button" onClick={resend} disabled={busy || !services.sms || otp?.locked || now < (otp?.resendAt || 0)}>{busy ? 'Please wait…' : !services.sms ? 'SMS sending unavailable' : now < (otp?.resendAt || 0) ? `Resend OTP in ${countdown(otp.resendAt, now)}` : otp?.sent ? 'Resend OTP ↗' : 'Send SMS code ↗'}</button>{otp?.sent && <p className="helper-note">Code valid until {formatTime(otp.expiresAt, timeZoneFor(pending))} ({timeZoneFor(pending)}).</p>}</>}
     <Link className="text-link back-link" to="/login">Back to sign in</Link></section></AuthShell>;
 }
 
@@ -309,7 +318,7 @@ function Navigation({ onHolidays }) {
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
   }, []);
   async function logout() { try { await api('/logout', {}); await refreshSession(); navigate('/login', true); } catch (error) { setLogoutError(error.message); } }
-  return <header className="navigation"><Brand /><Notice>{logoutError}</Notice><button className="hamburger" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="main-navigation" onClick={() => { setMenu(!menu); setProfileMenu(false); }}><span aria-hidden="true">{menu ? '×' : '☰'}</span></button><nav id="main-navigation" className={menu ? 'is-open' : ''} aria-label="Main navigation"><Link to="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</Link><Link to="/profile" aria-current={path === '/profile' ? 'page' : undefined}>Profile</Link><Link to="/settings" aria-current={path === '/settings' ? 'page' : undefined}>Settings</Link><button className="nav-link" onClick={() => { setMenu(false); onHolidays(); }}>Philippine Holidays <span aria-hidden="true">↗</span></button></nav>
+  return <header className="navigation"><Brand /><Notice>{logoutError}</Notice><button className="hamburger" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="main-navigation" onClick={() => { setMenu(!menu); setProfileMenu(false); }}><span aria-hidden="true">{menu ? '×' : '☰'}</span></button><nav id="main-navigation" className={menu ? 'is-open' : ''} aria-label="Main navigation"><Link to="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</Link><Link to="/profile" aria-current={path === '/profile' ? 'page' : undefined}>Profile</Link><Link to="/settings" aria-current={path === '/settings' ? 'page' : undefined}>Settings</Link><Link to="/send-email" aria-current={path === '/send-email' ? 'page' : undefined}>Send email</Link><button className="nav-link" onClick={() => { setMenu(false); onHolidays(); }}>Philippine Holidays <span aria-hidden="true">↗</span></button></nav>
     <div className="profile-control" ref={profileRef}><button className="avatar" aria-label="Open profile menu" aria-expanded={profileMenu} aria-controls="profile-menu" onClick={() => setProfileMenu(!profileMenu)}>{initials(user)}</button>{profileMenu && <div id="profile-menu" className="profile-dropdown"><strong>{fullName(user)}</strong><small>{user.email}</small><Link to="/profile">Your profile</Link><Link to="/settings">Settings</Link><button onClick={logout}>Logout ↗</button></div>}</div>
   </header>;
 }
@@ -344,6 +353,7 @@ function Accounts() {
 function HolidayBadges({ holiday }) { return <div className="badge-row">{holiday.categories.map((category) => <span key={category} className={`badge ${category}`}>{CATEGORIES[category].badge}</span>)}</div>; }
 const MONTHS = Array.from({ length: 12 }, (_, month) => new Intl.DateTimeFormat('en', { month: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(2026, month, 1))));
 function Holidays() {
+  const { services } = useApp();
   const currentYear = Number(new Intl.DateTimeFormat('en', { year: 'numeric', timeZone: 'Asia/Manila' }).format(new Date()));
   const [year, setYear] = useState(Math.min(2027, Math.max(2020, currentYear)));
   const [month, setMonth] = useState(Number(new Intl.DateTimeFormat('en', { month: 'numeric', timeZone: 'Asia/Manila' }).format(new Date())) - 1);
@@ -351,15 +361,20 @@ function Holidays() {
   const [selectedDate, setSelectedDate] = useState('');
   const [holidays, setHolidays] = useState([]);
   const [source, setSource] = useState('');
+  const [sourceUrl, setSourceUrl] = useState('');
   const [requestError, setRequestError] = useState('');
   const [retry, setRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    setHolidays([]); setSource(''); setSourceUrl(''); setRequestError('');
+    if (!services.holidays) { setLoading(false); return; }
     const controller = new AbortController();
-    setLoading(true); setRequestError(''); setHolidays([]);
-    api(`/holidays/${year}`, undefined, { signal: controller.signal }).then(result => { setHolidays(result.holidays); setSource(result.source); }).catch(error => { if (error.name !== 'AbortError') setRequestError(error.message); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    setLoading(true);
+    api(`/holidays/${year}`, undefined, { signal: controller.signal }).then(result => {
+      if (!controller.signal.aborted) { setHolidays(result.holidays); setSource(result.source); setSourceUrl(result.sourceUrl); }
+    }).catch(error => { if (!controller.signal.aborted) setRequestError(error.message); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [year, retry]);
+  }, [year, retry, services.holidays]);
 
   const visible = holidays.filter((holiday) => (category === 'all' || holiday.categories.includes(category)) && (!selectedDate || holiday.date === selectedDate));
   const activeHolidays = holidays.filter((holiday) => category === 'all' || holiday.categories.includes(category));
@@ -373,9 +388,10 @@ function Holidays() {
     setSelectedDate('');
   }
   return <><div className="subheading"><div><h3>A pause in the calendar.</h3><p>Philippines · Asia/Manila · +63</p></div><label className="year-label" htmlFor="holiday-year">Year<select id="holiday-year" value={year} onChange={(event) => selectYear(event.target.value)}>{YEARS.map((item) => <option key={item}>{item}</option>)}</select></label></div>
-    <p className="helper-note">Philippine public holidays for {year}{source ? ` · Source: ${source}` : ''}.</p>
+    <p className="helper-note">Philippine public holidays for {year}{source && <> · Source: {sourceUrl ? <a href={sourceUrl} target="_blank" rel="noreferrer">{source}</a> : source}</>}. Dates may change when official proclamations are issued.</p>
+    {!services.holidays && <Notice type="info">Philippine holiday data is temporarily unavailable. Please check again later.</Notice>}
     <div className="holiday-controls"><label htmlFor="holiday-category">Category<select id="holiday-category" value={category} onChange={(event) => { setCategory(event.target.value); setSelectedDate(''); }}><option value="all">All categories</option>{Object.entries(CATEGORIES).map(([key, item]) => <option value={key} key={key}>{item.label}</option>)}</select></label></div>
-    {loading ? <div className="loading-state" role="status"><span className="loader" aria-hidden="true" />Loading holidays for {year}…</div>
+    {!services.holidays ? null : loading ? <div className="loading-state" role="status"><span className="loader" aria-hidden="true" />Loading holidays for {year}…</div>
       : requestError ? <div className="empty-state"><Notice>{requestError}</Notice><button className="button outline" onClick={() => setRetry(value => value + 1)}>Retry ↗</button></div>
         : <><div className="calendar"><div className="calendar-heading"><button className="icon-button" aria-label="Previous month" disabled={year === 2020 && month === 0} onClick={() => moveMonth(-1)}>‹</button><div><label className="sr-only" htmlFor="calendar-month">Calendar month</label><select id="calendar-month" value={month} onChange={(event) => selectMonth(event.target.value)}>{MONTHS.map((name, index) => <option key={name} value={index}>{name}</option>)}</select><span>{year}</span></div><button className="icon-button" aria-label="Next month" disabled={year === 2027 && month === 11} onClick={() => moveMonth(1)}>›</button></div><table className="calendar-table"><caption className="sr-only">{MONTHS[month]} {year}, Philippine holiday calendar</caption><thead><tr>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => <th scope="col" key={day}>{day}</th>)}</tr></thead><tbody>{Array.from({ length: calendarCells(year, month).length / 7 }, (_, row) => <tr key={row}>{calendarCells(year, month).slice(row * 7, row * 7 + 7).map((date, column) => {
           const entries = activeHolidays.filter((holiday) => holiday.date === date);
@@ -458,7 +474,7 @@ export default function App() {
     return () => { clearInterval(timer); window.removeEventListener('focus', update); };
   }, [refreshSession]);
   const { user, pending } = session;
-  const protectedRoute = ['/dashboard', '/profile', '/settings'].includes(route.path);
+  const protectedRoute = ['/dashboard', '/profile', '/settings', '/send-email'].includes(route.path);
   useEffect(() => {
     if (!ready) return;
     if (route.path === '/') route.navigate(user ? '/dashboard' : '/login', true);
@@ -467,7 +483,7 @@ export default function App() {
   }, [ready, route.path, Boolean(user)]);
   useEffect(() => {
     setWorkspace(route.path === '/dashboard' && route.query.get('workspace') === 'holidays' ? 'holidays' : null);
-    const label = { '/register': 'Create account', '/login': 'Sign in', '/verify-email': 'Verify email', '/verify-mobile': 'Verify mobile', '/unlock-account': 'Unlock account', '/dashboard': 'Dashboard', '/profile': 'Profile', '/settings': 'Settings' }[route.path] || 'Haven';
+    const label = { '/register': 'Create account', '/login': 'Sign in', '/verify-email': 'Verify email', '/verify-mobile': 'Verify mobile', '/unlock-account': 'Unlock account', '/dashboard': 'Dashboard', '/profile': 'Profile', '/settings': 'Settings', '/send-email': 'Send email' }[route.path] || 'Haven';
     document.title = `${label} · Haven`;
     const timer = setTimeout(() => { const heading = document.querySelector('h1'); if (heading && !document.querySelector('[role="dialog"]')) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); } }, 0);
     return () => clearTimeout(timer);
@@ -475,7 +491,8 @@ export default function App() {
   function openHolidays() { if (route.path !== '/dashboard') route.navigate('/dashboard?workspace=holidays'); else setWorkspace('holidays'); }
   if (!ready) return <main className="startup-screen"><span className="brand">haven.</span><div role="status"><div className="loader" aria-hidden="true" />Opening your space…</div></main>;
   let screen;
-  if (protectedRoute) screen = user ? <><div id="authenticated-shell"><Navigation onHolidays={openHolidays} /><main id="main-content">{route.path === '/dashboard' ? <Dashboard openWorkspace={setWorkspace} /> : route.path === '/profile' ? <Profile /> : <Settings />}</main></div>{workspace && <Workspace initialTab={workspace} onClose={() => setWorkspace(null)} />}</> : null;
+  if (protectedRoute) screen = user ? <><div id="authenticated-shell"><Navigation onHolidays={openHolidays} /><main id="main-content">{route.path === '/dashboard' ? <Dashboard openWorkspace={setWorkspace} /> : route.path === '/profile' ? <Profile /> : route.path === '/send-email' ? <div className="content"><EmailForm available={session.services?.email || false} /><Footer /></div> : <Settings />}</main></div>{workspace && <Workspace initialTab={workspace} onClose={() => setWorkspace(null)} />}</> : null;
   else screen = { '/register': <Registration />, '/login': <Login />, '/verify-email': <EmailVerification />, '/verify-mobile': <MobileVerification />, '/unlock-account': <Unlock /> }[route.path] || (route.path === '/' ? null : <NotFound />);
-  return <AppContext.Provider value={{ ...route, user, pending, refreshSession, settings, setSettings }}><a className="skip-link" href="#main-content">Skip to content</a>{startupError && <Notice>{startupError}</Notice>}{screen}</AppContext.Provider>;
+  const services = session.services || { email: false, sms: false, holidays: false };
+  return <AppContext.Provider value={{ ...route, user, pending, services, refreshSession, settings, setSettings }}><a className="skip-link" href="#main-content">Skip to content</a>{startupError && <Notice>{startupError}</Notice>}{screen}</AppContext.Provider>;
 }

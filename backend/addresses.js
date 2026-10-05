@@ -16,7 +16,7 @@ const metroRanges = { CaloocanCity: [[1400, 1413], [1420, 1428]], LasPinas: [[17
   Muntinlupa: [[1770, 1781]], Navotas: [[1485, 1490]], Paranaque: [[1700, 1720]], Pasay: [[1300, 1309]],
   Pasig: [[1600, 1612]], Pateros: [[1620, 1621]], QuezonCity: [[1100, 1128]], SanJuan: [[1500, 1504]],
   Taguig: [[1630, 1639]], Valenzuela: [[1440, 1448]] };
-const regionInfo = (country, region) => countries[country]?.regions[region];
+const regionInfo = (country, region) => Object.hasOwn(countries, country) && Object.hasOwn(countries[country].regions, region) ? countries[country].regions[region] : undefined;
 
 async function getCities(country, region) {
   if (!regionInfo(country, region)) return [];

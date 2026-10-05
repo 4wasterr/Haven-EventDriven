@@ -52,10 +52,10 @@ class Store {
   deleteTokens(userId, type) { return this.query('DELETE FROM verification_tokens WHERE user_id = ? AND type = ?', [userId, type]); }
   async mobile(userId) { return (await this.query('SELECT * FROM mobile_verifications WHERE user_id = ?', [userId]))[0]; }
   async saveMobile(userId, fields) {
-    await this.query(`INSERT INTO mobile_verifications (user_id,provider_id,expires_at,resend_at,attempts,is_locked)
-      VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE provider_id=VALUES(provider_id),expires_at=VALUES(expires_at),
+    await this.query(`INSERT INTO mobile_verifications (user_id,provider_id,otp_hash,expires_at,resend_at,attempts,is_locked)
+      VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE provider_id=VALUES(provider_id),otp_hash=VALUES(otp_hash),expires_at=VALUES(expires_at),
       resend_at=VALUES(resend_at),attempts=VALUES(attempts),is_locked=VALUES(is_locked)`,
-      [userId, fields.provider_id || null, fields.expires_at || null, fields.resend_at || null, fields.attempts || 0, fields.is_locked ? 1 : 0]);
+      [userId, fields.provider_id || null, fields.otp_hash || null, fields.expires_at || null, fields.resend_at || null, fields.attempts || 0, fields.is_locked ? 1 : 0]);
   }
   async session(hash, now) {
     return (await this.query('SELECT * FROM sessions WHERE token_hash = ? AND expires_at > ?', [hash, new Date(now)]))[0];
@@ -79,7 +79,8 @@ class Store {
       await tx.query('UPDATE api_rate_limits SET count = count + 1 WHERE rate_key = ?', [hashed]);
       return 0;
     };
-    // Reuse an account transaction so its quota update rolls back if account creation fails.
+    // Call outside the account transaction for registration attempts; a rejected
+    // account submission must still count toward the five-request hourly limit.
     return this.connection ? consume(this) : this.transaction(consume);
   }
 }

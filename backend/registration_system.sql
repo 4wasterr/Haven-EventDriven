@@ -58,7 +58,7 @@ CREATE TABLE `users` (
   `is_locked` tinyint(1) DEFAULT 0,
   `lockout_until` timestamp NULL DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NOT NULL DEFAULT current_timestamp()
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -98,7 +98,8 @@ ALTER TABLE `users`
 --
 ALTER TABLE `verification_tokens`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `fk_verification_tokens_user` (`user_id`);
+  ADD KEY `fk_verification_tokens_user` (`user_id`),
+  ADD KEY `idx_verification_lookup` (`token_hash`,`type`);
 
 --
 -- Constraints for dumped tables

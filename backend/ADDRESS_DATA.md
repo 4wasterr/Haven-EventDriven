@@ -28,15 +28,6 @@ Country State City data and the adapted country/subdivision snapshot are provide
 
 Google address metadata and GeoNames data are provided under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The country snapshot combines country/subdivision data, phone prefixes, and Google postal metadata; the US snapshot selects ZIP, locality, and state fields from GeoNames. Source attribution is also served publicly at `/address-data-sources.txt` and linked from registration.
 
-## Refresh
+## Offline data
 
-Run from the project root after installing frontend and backend dependencies:
-
-```powershell
-node scripts/update-address-data.cjs
-python scripts/update-us-postal-data.py
-npm.cmd test
-npm.cmd run build
-```
-
-The first command uses the installed Country State City version and retrieves Google metadata. Update the packages deliberately if newer city/postal records are needed. Review the generated snapshot and Caloocan associations before publishing; restarting the backend loads the new city/postal packages.
+Country, city, postal and phone validation use installed packages and bundled snapshots. Address lookups make no external API requests. The previous Google metadata and GeoNames download scripts have been removed while integrations are disconnected. Source links above record attribution for the existing data.

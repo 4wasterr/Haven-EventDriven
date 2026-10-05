@@ -24,7 +24,7 @@ const tables = [
     INDEX (expires_at), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS mobile_verifications (
-    user_id CHAR(36) PRIMARY KEY, provider_id VARCHAR(255), expires_at DATETIME(3), resend_at DATETIME(3),
+    user_id CHAR(36) PRIMARY KEY, provider_id VARCHAR(255), otp_hash VARCHAR(255), expires_at DATETIME(3), resend_at DATETIME(3),
     attempts INT NOT NULL DEFAULT 0, is_locked BOOLEAN NOT NULL DEFAULT FALSE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -32,5 +32,10 @@ const tables = [
     rate_key CHAR(64) PRIMARY KEY, count INT NOT NULL DEFAULT 0, reset_at DATETIME(3) NOT NULL, INDEX (reset_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
 ];
-async function ensureSchema(db) { for (const statement of tables) await db.query(statement); }
+async function ensureSchema(db) {
+  for (const statement of tables) await db.query(statement);
+  await db.query('ALTER TABLE mobile_verifications ADD COLUMN IF NOT EXISTS otp_hash VARCHAR(255) NULL AFTER provider_id');
+  // Imported versions of the original schema lack the token lookup index.
+  await db.query('CREATE INDEX IF NOT EXISTS idx_verification_lookup ON verification_tokens (token_hash,type)');
+}
 module.exports = { ensureSchema };

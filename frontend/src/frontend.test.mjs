@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { COUNTRIES, birthdayError, internationalMobileNumber, postalCodeValid, passwordRules, suggestPassword, validateLogin, validateRegistration } from './validation.mjs';
+import { COUNTRIES, birthdayError, internationalMobileNumber, postalCodeValid, passwordRules, suggestPassword, validEmail, manilaToday, validateLogin, validateRegistration } from './validation.mjs';
 import { YEARS, calendarCells } from './calendar.mjs';
 import { countdown, timeZoneFor } from './format.mjs';
 
@@ -13,6 +13,16 @@ test('birthday requires an actual calendar date, MM/DD/YYYY, and the thirteenth 
   assert.match(birthdayError('10/04/2027', today), /future/);
   for (const date of ['2/01/2000', '02/30/2000', '02/29/2001', '13/01/2000', '00/15/2000', '01/00/2000', '2000-01-01']) assert.notEqual(birthdayError(date, today), '', date);
   assert.equal(birthdayError('02/29/2000', today), '');
+});
+test('registration age uses the Philippine calendar date even before midnight in UTC', () => {
+  const today = manilaToday(new Date('2026-10-04T16:00:00Z'));
+  assert.equal(today.getDate(), 5);
+  assert.equal(birthdayError('10/05/2013', today), '');
+  assert.match(birthdayError('10/06/2013', today), /13/);
+});
+test('email format rejects malformed addresses while accepting public aliases', () => {
+  for (const email of ['<alex>@gmail.com', '.alex@gmail.com', 'alex.@gmail.com', 'al..ex@gmail.com', 'alex@-gmail.com', 'alex@gmail..com', 'alex@@gmail.com', null]) assert.equal(validEmail(email), false);
+  assert.equal(validEmail('alex+haven@gmail.com'), true);
 });
 test('registration validates names, initials, public providers, password limits and confirmation', () => {
   assert.deepEqual(validateRegistration(valid, today), {});
@@ -29,6 +39,8 @@ test('country, province, city, postal code and national mobile number must agree
   for (const values of [{ country: 'unknown' }, { mobile: '09171234567' }, { postal: '1100' }, { city: 'Cebu City' }, { houseStreet: '<script>' }]) assert.ok(Object.keys(validateRegistration({ ...valid, ...values }, today, address)).length);
   assert.deepEqual(validateRegistration({ ...valid, country: 'US', region: 'California', city: 'San Francisco', postal: '94102', mobile: '4155550123' }, today), {});
   assert.deepEqual(validateRegistration({ ...valid, country: 'GB', region: 'England', city: 'London', postal: 'SW1A 1AA', mobile: '7400123456' }, today), {});
+  for (const country of ['constructor', '__proto__', 'toString']) assert.ok(validateRegistration({ ...valid, country }, today).country);
+  assert.ok(validateRegistration({ ...valid, region: 'toString' }, today).region);
 });
 test('all countries, national mobile validation, and countries without postal codes are supported', () => {
   assert.equal(Object.keys(COUNTRIES).length, 250);
@@ -64,7 +76,7 @@ test('API client obtains CSRF, sends server credentials, and preserves delivery 
   globalThis.fetch = async (url, options) => {
     requests.push({ url, options });
     if (url === '/api/csrf') return Response.json({ csrfToken: 'signed-token' });
-    return Response.json({ message: 'Resend could not accept the email.', email_submitted: false }, { status: 201 });
+    return Response.json({ message: 'The email service could not accept the email.', email_submitted: false }, { status: 201 });
   };
   try {
     const { api } = await import('./api.mjs?test=csrf');

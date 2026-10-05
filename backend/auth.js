@@ -12,8 +12,11 @@ function equal(a, b) {
 }
 
 function security(app, { env, store, now }) {
-  const secret = env.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
   const production = env.NODE_ENV === 'production';
+  if (production && (typeof env.CSRF_SECRET !== 'string' || env.CSRF_SECRET.length < 32 || /replace|placeholder/i.test(env.CSRF_SECRET))) {
+    throw new Error('Production requires a CSRF_SECRET of at least 32 characters.');
+  }
+  const secret = env.CSRF_SECRET || crypto.randomBytes(32).toString('hex');
   const signature = nonce => crypto.createHmac('sha256', secret).update(nonce).digest('hex');
   const options = req => ({ httpOnly: true, secure: production || req.secure, sameSite: 'lax', path: '/' });
   if (env.TRUST_PROXY === '1') app.set('trust proxy', 1);
@@ -21,6 +24,11 @@ function security(app, { env, store, now }) {
   app.use((req, res, next) => {
     res.set({ 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
     if (production && !req.secure) return res.status(426).json({ message: 'HTTPS is required.' });
+    if (production) {
+      const directTls = req.socket.encrypted;
+      const protocol = directTls ? req.socket.getProtocol?.() : env.TRUST_PROXY === '1' ? req.get('X-TLS-Version') : null;
+      if (protocol !== 'TLSv1.3') return res.status(426).json({ message: 'TLS 1.3 is required.' });
+    }
     if (production) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     next();
   });

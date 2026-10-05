@@ -1,6 +1,7 @@
 import countryData from './data/countries.json' with { type: 'json' };
 import { parsePhoneNumberFromString, isSupportedCountry } from 'libphonenumber-js/max';
 export const COUNTRIES = countryData;
+const countryFor = code => Object.hasOwn(COUNTRIES, code) ? COUNTRIES[code] : undefined;
 
 export const PUBLIC_EMAIL_PROVIDERS = new Set([
   'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'hotmail.co.uk',
@@ -10,10 +11,20 @@ export const PUBLIC_EMAIL_PROVIDERS = new Set([
 ]);
 
 export const normalizeEmail = (value = '') => value.trim().toLowerCase();
-export const validEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) && value.length <= 255;
+export const validEmail = (value) => {
+  if (typeof value !== 'string' || value.length > 255) return false;
+  const [local] = value.split('@');
+  return /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(value) &&
+    local.length <= 64 && !local.startsWith('.') && !local.endsWith('.') && !local.includes('..');
+};
+export function manilaToday(instant = new Date()) {
+  const parts = new Intl.DateTimeFormat('en', { timeZone: 'Asia/Manila', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(instant);
+  const part = name => Number(parts.find(item => item.type === name).value);
+  return new Date(part('year'), part('month') - 1, part('day'));
+}
 export const phoneDigits = (value = '') => value.replace(/[\s()-]/g, '');
 export function internationalMobileNumber(value, countryCode) {
-  const country = COUNTRIES[countryCode], digits = phoneDigits(value);
+  const country = countryFor(countryCode), digits = phoneDigits(value);
   if (!country || !/^\d+$/.test(digits) || (countryCode === 'PH' && !/^9\d{9}$/.test(digits))) return '';
   const number = parsePhoneNumberFromString(country.prefix + digits);
   if (!number?.isValid() || !['MOBILE', 'FIXED_LINE_OR_MOBILE'].includes(number.getType())) return '';
@@ -21,7 +32,7 @@ export function internationalMobileNumber(value, countryCode) {
   return number.number;
 }
 export function postalCodeValid(countryCode, value) {
-  const country = COUNTRIES[countryCode], code = String(value || '').trim().toUpperCase();
+  const country = countryFor(countryCode), code = String(value || '').trim().toUpperCase();
   if (!country) return false;
   if (!country.postalApplicable) return code === 'N/A';
   return country.postalPattern ? new RegExp(`^(?:${country.postalPattern})$`, 'i').test(code) : /^[\p{L}\p{N}][\p{L}\p{N} -]{0,19}$/u.test(code);
@@ -34,7 +45,7 @@ export const passwordRules = (value = '') => [
   { label: 'Special character', valid: /[^A-Za-z0-9\s]/.test(value) },
 ];
 
-export function birthdayError(value, now = new Date()) {
+export function birthdayError(value, now = manilaToday()) {
   if (!/^\d{2}\/\d{2}\/\d{4}$/.test(value)) return 'Use MM/DD/YYYY, for example 06/15/2000.';
   const [month, day, year] = value.split('/').map(Number);
   const birthday = new Date(0);
@@ -46,7 +57,7 @@ export function birthdayError(value, now = new Date()) {
   return age < 13 ? 'You must be at least 13 years old to register.' : '';
 }
 
-export function validateRegistration(values, now = new Date(), addressChoices) {
+export function validateRegistration(values, now = manilaToday(), addressChoices) {
   const errors = {};
   for (const key of ['firstName', 'lastName']) {
     const name = (values[key] || '').trim();
@@ -58,12 +69,12 @@ export function validateRegistration(values, now = new Date(), addressChoices) {
   const email = normalizeEmail(values.email);
   if (!validEmail(email)) errors.email = 'Enter a valid email address.';
   else if (!PUBLIC_EMAIL_PROVIDERS.has(email.split('@')[1])) errors.email = 'Use a supported public email provider, such as Gmail, Outlook, Yahoo, iCloud, or Proton.';
-  const country = COUNTRIES[values.country];
+  const country = countryFor(values.country);
   if (!country) errors.country = 'Select a supported country.';
   if (!internationalMobileNumber(values.mobile, values.country)) errors.mobile = country?.phoneHint || 'Select a country and enter a valid mobile number.';
   const street = (values.houseStreet || '').trim();
   if (!street || street.length > 255 || !/^[\p{L}\p{N}\s.,'\u2019/#()&-]+$/u.test(street) || !/[\p{L}\p{N}]/u.test(street)) errors.houseStreet = 'Enter a house and street using letters, numbers, and standard punctuation (maximum 255 characters).';
-  const region = country?.regions[values.region];
+  const region = country && Object.hasOwn(country.regions, values.region) ? country.regions[values.region] : undefined;
   if (!region) errors.region = 'Select a province or state.';
   if (!values.city?.trim() || values.city.length > 100 || (addressChoices?.cities && !addressChoices.cities.some(city => city.name === values.city))) errors.city = 'Select a city in the chosen province or state.';
   const postalValid = addressChoices?.postalMode === 'select' ? addressChoices.postalCodes.some(option => option.value === values.postal) : postalCodeValid(values.country, values.postal);

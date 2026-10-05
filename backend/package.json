@@ -1,16 +1,13 @@
 {
   "name": "haven-eventdriven-main",
   "version": "1.0.0",
-  "description": "Haven Express backend with MariaDB registration, Resend verification emails, and Infobip 2FA SMS OTP.",
+  "description": "Haven Express backend with MariaDB accounts, Brevo email, iProg SMS OTPs, and Calendarific Philippine holidays.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "email:test": "node email-test.js",
     "email:check": "node email-check.js",
-    "verify-email:test": "node verify-email-test.js",
-    "sms:test": "node sms-test.js",
     "sms:check": "node sms-check.js",
-    "providers:check": "node provider-check.js",
+    "holidays:check": "node holiday-check.js",
     "db:check": "node check-services.js",
     "test": "node --test test/*.test.js"
   },
@@ -21,6 +18,8 @@
   "dependencies": {
     "@countrystatecity/countries": "^1.0.9",
     "@countrystatecity/postalcodes": "^1.0.2",
+    "@getbrevo/brevo": "^6.0.3",
+    "axios": "^1.20.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.5",

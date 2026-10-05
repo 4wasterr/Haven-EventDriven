@@ -1,21 +1,26 @@
 # Haven
 
-React and Express application with MariaDB accounts, verification emails through Resend, Infobip 2FA SMS OTP, secure login, and a live Philippine holiday calendar. Registration, email confirmation, OTP entry, account unlock and logout all call the backend. Credentials and verification codes are never stored in browser storage.
+React and Express application with MariaDB accounts, local address data, Brevo transactional emails, iProg SMS OTP verification, and Calendarific Philippine public holidays. See [the one-to-one requirement check](REQUIREMENTS_1_TO_1_CHECK_2026-10-06.md) for all 75 recorded source items and current verification results, and [the implementation audit](REQUIREMENTS_AUDIT.md) for the overview.
+
+## Current behavior
+
+- Existing verified accounts can sign in, view their dashboard/profile and sign out.
+- Brevo sends email verification links and account unlock alerts when its credentials and sender are configured. Pending account details remain in the database.
+- New accounts can register and verify their email when Brevo is configured. Email confirmation automatically requests an iProg SMS OTP when configured; full dashboard access requires both verifications.
+- Haven generates cryptographically random six-digit SMS codes, stores only salted account/phone-bound hashes, and verifies them locally. Codes expire after five minutes. Resends require 60 seconds, invalidate the previous code, and retain the three-attempt budget; three incorrect codes lock mobile verification until support intervenes.
+- Registration sends the professional Haven verification email automatically. Accounts start unverified; sign-in returns 403 until the emailed token is confirmed. Tokens are generated from 32 cryptographically random bytes, stored only as hashes, expire after 24 hours, and can be used once.
+- Signed-in, fully verified users can open **Send email** (`/send-email`) to send a message through Brevo. Submissions require the existing session and CSRF token and are limited to ten send attempts per account per hour.
+- Account lockout remains enforced. Unlock links retain their two-minute cooldown, expiry, and single-use token checks.
+- Registration accepts at most **five requests per IP per hour**, including invalid fields, malformed JSON, duplicate emails, unavailable delivery configuration and rolled-back account writes. CSRF failures are rejected before consuming the quota. A 429 response supplies `Retry-After`; the registration form shows a countdown.
+- The Calendars/Holidays modal fetches Calendarific asynchronously for the selected year, **2020–2027**. Its national Philippine records are classified using the provider's `primary_type`; regular, special non-working and Islamic holidays have distinct badges. Working holidays, observances and regional-only holidays are excluded. No dates or holiday datasets are stored in MariaDB or substituted from local samples. Missing keys and provider failures show an unavailable state with the year selector retained.
+- Country, city and postal choices use installed geographic packages and bundled snapshots through the local backend. They do not contact external address APIs. See [address data](backend/ADDRESS_DATA.md) for coverage and attribution.
+- The dashboard image is bundled locally, so displaying it makes no external image request.
+
+Passwords, sessions, verification tokens, rate limits and existing account data remain in MariaDB. The local `/api` routes still connect the React frontend to Express.
 
 ## Run
 
-In VS Code, open a **new terminal** in this project. It uses Command Prompt so the normal `npm` command works on Windows.
-
-To start the app from the frontend folder:
-
-```cmd
-cd frontend
-npm run dev
-```
-
-This command starts the backend if needed, waits until its database and API are ready, then starts the frontend. An already running Haven backend is reused. Open the Local URL printed by Vite. It starts on port 5173, or uses the next available port if 5173 is already occupied. To stop it, press Ctrl+C. In an existing PowerShell terminal, use `npm.cmd run dev` instead of `npm run dev`. If you intentionally manage the backend separately, `npm run dev:frontend` starts only Vite.
-
-Use Node.js 22.12+ (Node.js 24 is recommended). Start MariaDB and keep your database values, Resend email key and Infobip 2FA credentials in `backend/.env`. The configured database must already exist. The backend creates any missing application tables at startup and preserves existing data.
+Use Node.js 22.12+ and start MariaDB. Set database connection values in `backend/.env`; `backend/.env.example` lists the supported settings. The configured database must exist. Startup creates missing application tables and preserves existing rows.
 
 ```powershell
 npm.cmd --prefix backend install
@@ -23,31 +28,76 @@ npm.cmd --prefix frontend install
 npm.cmd run dev
 ```
 
-Open the Local URL printed by Vite (normally **http://localhost:5173**). This starts or reuses the API on port 5000, waits for it to be ready, and starts Vite on port 5173 or the next available port. Vite forwards `/api` requests to the backend. Restart the backend after changing `.env`. The frontend retries interrupted read requests briefly during backend restarts; form submissions are never repeated after an ambiguous connection failure.
+You can also run `npm run dev` from the frontend folder in Command Prompt. The launcher starts or reuses the backend, waits for the database and local API, then starts Vite. Open its printed Local URL (normally **http://localhost:5173**). Press Ctrl+C to stop it. `npm run dev:frontend` starts Vite alone if you manage the backend separately.
 
-Set `PUBLIC_APP_URL=http://localhost:5173` in `backend/.env` so links in emails open the same application host. Use your public HTTPS application URL when deployed. The URLs must be reachable from the device opening the email; localhost links only work on this computer.
+Vite forwards `/api` requests to the local backend, normally port 5000. Set `PUBLIC_APP_URL` to the application origin used in the browser. Restart the backend after changing its environment settings.
 
-## Email and SMS configuration
+## Brevo email setup
 
-Email uses **Resend only**. Set `RESEND_API_KEY` in `backend/.env` using a key from [Resend](https://resend.com/api-keys). For email to arbitrary Gmail, Outlook, Yahoo and other supported registration addresses, verify a domain you own in [Resend Domains](https://resend.com/domains), then set `RESEND_FROM` to an address on that domain. You cannot use `gmail.com` as your own sender domain.
+Set these values in `backend/.env` and restart the backend:
 
-`RESEND_FROM=onboarding@resend.dev` is for testing and only reaches the email address associated with your Resend account. It does not support general registrations. See [email setup](backend/EMAIL_SETUP.md), including actual inbox tests and the real-account verification resend command. Restart the backend after changing `.env`.
+```dotenv
+BREVO_API_KEY=your_brevo_api_key
+SENDER_NAME=Haven
+SENDER_EMAIL=your_verified_sender@example.com
+PUBLIC_APP_URL=http://localhost:5173
+```
 
-SMS uses **Infobip 2FA**. Set `INFOBIP_API_KEY`, `INFOBIP_BASE_URL`, `INFOBIP_2FA_APPLICATION_ID` and `INFOBIP_2FA_MESSAGE_ID` in `backend/.env`. Infobip's [self-sign-up SMS guide](https://www.infobip.com/docs/sms/get-started) includes the Philippines in its coverage and lists 15 free SMS in a 60-day trial; [sign-up does not require a credit card](https://www.infobip.com/docs/essentials/getting-started/create-an-account). The portal is authoritative for your actual free units and verified-recipient allowance. Ongoing unrestricted SMS requires a paid account. Bird and Twilio keys are ignored. See [SMS setup](backend/SMS_SETUP.md).
+Use a sender verified in your Brevo account and set `PUBLIC_APP_URL` to the actual frontend origin so verification and unlock links open the correct application. Keep the API key in the backend environment only. The implementation uses the modern [`BrevoClient` SDK](https://github.com/getbrevo/brevo-node) and `transactionalEmails.sendTransacEmail`.
 
-## Account behavior
+`POST /api/send-email` accepts `recipientEmail`, optional `recipientName`, optional `subject`, and `message`. It returns `{ "success": true, "messageId": "..." }` after Brevo accepts the email. Invalid input returns 400, missing configuration returns 503, and provider delivery failures return 502. Messages preserve line breaks and escape HTML. An acceptance ID confirms submission to Brevo; delivery status can be checked in Brevo's transactional email logs.
 
-- Registration validates the fields again on the server and hashes passwords using bcrypt with work factor 12. Passwords have a maximum of 72 UTF-8 bytes to avoid bcrypt truncation. Registration allows five completed account creations per IP per hour; invalid fields, duplicate emails, configuration failures and rolled-back database writes do not consume that quota. The quota commits in the same transaction as the account. A separate burst limit allows 60 submissions per IP per minute. Both limits live in MariaDB, and hourly-limit responses show the remaining wait.
-- Email verification uses a random 256-bit, single-use token, stored as a SHA-256 hash, with a 24-hour expiry. Opening a link shows a confirmation button; email scanners cannot consume it by issuing a GET.
-- Confirming email automatically requests a six-digit SMS code through Infobip 2FA. The server enforces five-minute validity, three entry attempts, and a 60-second resend delay. Resending preserves the attempt budget. Delivery failures leave a manual retry available. Verification lockout requires support recovery; there is no browser bypass.
-- Login requires both verifications. Three consecutive wrong passwords lock the account, invalidate sessions and request a security email through Resend. The single-use unlock link enforces a two-minute cooling period. Waiting alone does not unlock the account.
-- Sessions use random tokens stored as hashes in MariaDB and HttpOnly, SameSite cookies. Authenticated sessions expire after eight hours; pending verification sessions after 24 hours. Mutating API requests require a signed anti-CSRF token and a permitted Origin.
-- The account modal lists only the signed-in user's accessible account. Backend authorization protects profile and holiday data.
-- The holiday selector requests the selected year (2020–2027) from an external API. Nager.Date is the default. Set `CALENDARIFIC_API_KEY` to use Calendarific. No local holiday dataset is stored; provider failures display a retry action. Provider coverage varies: the checked Nager.Date 2026 dataset omitted Islamic holidays. The app displays Islamic badges whenever the selected provider supplies those entries. Classifications are inferred from provider names/descriptions and should be checked against annual proclamations for official use.
+## iProg SMS OTP setup
 
-The country dropdown includes 250 countries and territories and 5,260 subdivision choices. Cities and postal areas load from the API after each selection; changing a parent clears its dependent fields. The Philippines has 82 provinces plus Metro Manila, including all 17 Metro Manila LGUs. Caloocan offers 23 distinct ZIP codes with postal-area names and North/South labels. The server checks the city and postal choices again. Country-specific mobile validation also updates with the country.
+Set these values in `backend/.env` and restart the backend:
 
-Postal directories cover 125 countries. Full city-associated codes become dropdowns; elsewhere the form accepts a country-format-checked postal code. Countries without postal codes use `N/A`. The data does not verify individual street addresses, and some subdivisions have no city records. See [address data and coverage](backend/ADDRESS_DATA.md) for sources, limitations and refresh commands. Display preferences are the only persistent browser-side application data.
+```dotenv
+IPROG_API_URL=https://www.iprogsms.com/api/v1
+IPROG_API_TOKEN=your_iprog_api_token
+```
+
+Validate the token and available credits without sending an SMS:
+
+```powershell
+npm.cmd --prefix backend run sms:check
+```
+
+If this reports that iProg rejected `IPROG_API_TOKEN`, replace it with the current API token from your iProg account in `backend/.env`, restart the backend, and run the check again. iProg can return HTTP 200 with `status: 500` and `message: "Invalid Token"`; Haven treats this as unavailable SMS authentication (HTTP 503, `reason: "sms_invalid_credentials"`) rather than a retryable delivery error. Credentials and raw provider bodies are never returned to the browser or printed by the check.
+
+`backend/sms.js` sends Axios requests to iProg's documented `POST /api/v1/sms_messages` endpoint with `api_token`, `phone_number` (country code and digits), and `message`. `IPROG_API_URL` is the API base URL; the adapter appends `/sms_messages`. See the [iProg API documentation](https://www.iprogsms.com/api/v1/documentation). Haven owns OTP generation, storage, expiry, attempts and verification instead of using iProg's provider-generated OTP endpoint.
+
+The SMS body includes the localized expiry; an example is:
+
+```text
+Haven
+Your OTP is 482719
+Expires at Oct 4, 2026, 8:05 AM (Asia/Manila). Valid for 5 minutes.
+```
+
+The digits and timestamp above are illustrative; each send generates a new six-digit code and a five-minute expiry. The phone's actual **sender name** is controlled by iProg. Request and approve **Haven** in your iProg account to display it as the sender; adding Haven to the body does not set the sender ID. iProg documents Philippine network coverage and sender approval requirements in its [FAQ](https://www.iprogsms.com/faqs); international delivery is not verified by this project.
+
+After email verification, the existing verification session can call `POST /api/send-otp` with `{ "phoneNumber": "09171234567" }`. The phone must match the account's registered mobile number. Existing `POST /api/send-mobile-otp` and `/api/resend-mobile-otp` routes use the stored number without requiring a body field. All routes require the session cookie and signed `X-CSRF-Token` from `/api/csrf`; they share the resend cooldown and send limit. Sending returns `{ success: true, message, otp: { sent, expiresAt, resendAt, attemptsRemaining, locked } }`, without exposing the code or raw provider response. Missing/invalid input returns 400, early resends 429 with `Retry-After`, locked verification 423, missing configuration 503, and provider failures 502.
+
+`POST /api/verify-mobile` accepts `{ "code": "482719" }` and compares it against the persisted salted verifier. Successful verification clears the code and verification session; sign in to continue. Expired codes return 410, incorrect codes return 400, and the third incorrect code returns 423. A delivered code can still be checked locally if SMS settings become unavailable. Failed SMS resends roll back changes to the previous code and cooldown. Startup adds the nullable `otp_hash` column to existing `mobile_verifications` tables without replacing account rows.
+
+Deadlines are stored in UTC and returned to the browser as epoch milliseconds. The SMS and UI format the same expiry using the registered country's default time zone, overridden by the selected province/state's zone when available (Philippines: Asia/Manila). The five-minute deadline is calculated before provider submission and persisted unchanged, so provider latency cannot shift the timestamp printed in the SMS.
+
+## Philippine holiday API
+
+Set `CALENDARIFIC_API_KEY` in `backend/.env` and restart the backend. Keep the key server-side. [Calendarific's documentation](https://calendarific.com/api-documentation) describes free account/key creation, the HTTPS `/api/v2/holidays` endpoint, `country=PH`, `year`, and returned classifications. Your email and SMS keys cannot authenticate the holiday service.
+
+```dotenv
+CALENDARIFIC_API_KEY=your_calendarific_api_key
+```
+
+```powershell
+npm.cmd --prefix backend run holidays:check -- 2020
+npm.cmd --prefix backend run holidays:check -- 2027
+```
+
+`GET /api/holidays/:year` requires a fully verified authenticated session and fetches that year from the provider on every request. It returns sorted, deduplicated records, provider attribution and `Asia/Manila`. Islamic public holidays retain their regular/special classification plus an Islamic badge. Dates may change with official proclamations, particularly future Islamic holidays. Check the provider's current data rather than treating predictions as final announcements.
+
+Unknown legal classifications and malformed dates fail explicitly; they are never guessed or generated locally. Provider authentication, quota and network errors do not expose the key or raw response. `createApp` still accepts injectable holiday, email and SMS services for tests; health/session checks validate configuration without sending messages or fetching holidays.
 
 ## Checks
 
@@ -55,25 +105,34 @@ Postal directories cover 125 countries. Full city-associated codes become dropdo
 npm.cmd test
 npm.cmd run build
 npm.cmd --prefix backend run db:check
-npm.cmd --prefix backend run providers:check
-npm.cmd --prefix backend run sms:check
-# Optional: simulate Resend delivery; this address has no inbox.
-npm.cmd --prefix backend run providers:check -- --sandbox-email
+npm.cmd --prefix backend run email:check
 ```
 
-The provider check reads Infobip 2FA application/template settings without sending SMS. Unit/API tests stub Resend email and Infobip SMS delivery and cover validation, token expiry/reuse, CSRF, rate limits, OTP attempts, resend, session authorization, lockout and unlock. To run the actual MariaDB SQL integration check:
+Tests exercise the real Brevo SDK with a mocked HTTP transport, iProg request/response handling with a mocked Axios client, and authentication workflows with injected delivery adapters. They check local OTP persistence, expiry, cooldowns, concurrent requests, lockout, failed resend recovery and removal of the direct-verification bypass. No real emails or SMS are sent by the tests. To check the actual MariaDB workflow inside a transaction rolled back after testing (including the idempotent startup schema additions):
 
 ```powershell
-cd backend
 $env:RUN_DATABASE_TESTS='1'
-node --test test/database.test.js
+npm.cmd --prefix backend test
 Remove-Item Env:RUN_DATABASE_TESTS
 ```
 
-That check uses the configured MariaDB database inside an outer transaction and rolls back all test rows. It sends no real emails or SMS.
-
 ## Production
 
-Run `npm.cmd run build`, then `npm.cmd start` to serve the frontend and API together on port 5000. Set `NODE_ENV=production`, a public HTTPS `PUBLIC_APP_URL`, and a strong `CSRF_SECRET`. Supply `TLS_CERT_FILE` and `TLS_KEY_FILE` to make Node enforce TLS 1.3 directly, or set `TRUST_PROXY=1` behind a trusted reverse proxy enforcing TLS 1.3. Production requests over HTTP are rejected; session cookies become Secure. Do not expose the HTTP backend directly when trusting a proxy.
+Run `npm.cmd run build`, then `npm.cmd start` to serve the frontend and local API together on port 5000. Set `NODE_ENV=production`, an HTTPS `PUBLIC_APP_URL`, and a random `CSRF_SECRET` of at least 32 characters. Supply `TLS_CERT_FILE` and `TLS_KEY_FILE` for TLS 1.3 directly, or set `TRUST_PROXY=1` behind a trusted reverse proxy. Production rejects HTTP and any negotiated TLS version other than 1.3 before parsing payloads; cookies are Secure and HttpOnly.
 
-The original imported schema remains in `backend/registration_system.sql`. Startup additions are in `backend/schema.js`; existing account data and token rows are preserved. Legacy client-supplied password hashes cannot be converted to secure password hashes without the original password; affected accounts require password recovery before they can sign in.
+For a trusted Nginx proxy, configure TLS 1.3 and overwrite both transport headers:
+
+```nginx
+ssl_protocols TLSv1.3;
+# Inside the location proxying to the private Haven backend:
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-TLS-Version $ssl_protocol;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_pass http://127.0.0.1:5000;
+```
+
+Keep the backend accessible only to the trusted proxy. A missing or older `X-TLS-Version` is rejected. Local development continues on loopback HTTP; it is not a TLS-compliant production deployment.
+
+The original schema is in `backend/registration_system.sql`; startup additions are in `backend/schema.js`. Existing rows are preserved. Legacy client-supplied password hashes require password recovery before those accounts can sign in.
+
+The bundled dashboard photograph comes from [the original Unsplash image](https://images.unsplash.com/photo-1472396961693-142e6e269027).
