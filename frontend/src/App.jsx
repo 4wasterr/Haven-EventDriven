@@ -3,7 +3,6 @@ import { COUNTRIES, manilaToday, passwordRules, suggestPassword, validateLogin, 
 import { countdown, formatTime, timeZoneFor } from './format.mjs';
 import { api } from './api.mjs';
 import { CATEGORIES, YEARS, calendarCells } from './calendar.mjs';
-import EmailForm from './EmailForm.jsx';
 
 const AppContext = createContext(null);
 const useApp = () => useContext(AppContext);
@@ -318,7 +317,7 @@ function Navigation({ onHolidays }) {
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); };
   }, []);
   async function logout() { try { await api('/logout', {}); await refreshSession(); navigate('/login', true); } catch (error) { setLogoutError(error.message); } }
-  return <header className="navigation"><Brand /><Notice>{logoutError}</Notice><button className="hamburger" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="main-navigation" onClick={() => { setMenu(!menu); setProfileMenu(false); }}><span aria-hidden="true">{menu ? '×' : '☰'}</span></button><nav id="main-navigation" className={menu ? 'is-open' : ''} aria-label="Main navigation"><Link to="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</Link><Link to="/profile" aria-current={path === '/profile' ? 'page' : undefined}>Profile</Link><Link to="/settings" aria-current={path === '/settings' ? 'page' : undefined}>Settings</Link><Link to="/send-email" aria-current={path === '/send-email' ? 'page' : undefined}>Send email</Link><button className="nav-link" onClick={() => { setMenu(false); onHolidays(); }}>Philippine Holidays <span aria-hidden="true">↗</span></button></nav>
+  return <header className="navigation"><Brand /><Notice>{logoutError}</Notice><button className="hamburger" aria-label={menu ? 'Close navigation' : 'Open navigation'} aria-expanded={menu} aria-controls="main-navigation" onClick={() => { setMenu(!menu); setProfileMenu(false); }}><span aria-hidden="true">{menu ? '×' : '☰'}</span></button><nav id="main-navigation" className={menu ? 'is-open' : ''} aria-label="Main navigation"><Link to="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</Link><Link to="/profile" aria-current={path === '/profile' ? 'page' : undefined}>Profile</Link><Link to="/settings" aria-current={path === '/settings' ? 'page' : undefined}>Settings</Link><button className="nav-link" onClick={() => { setMenu(false); onHolidays(); }}>Philippine Holidays <span aria-hidden="true">↗</span></button></nav>
     <div className="profile-control" ref={profileRef}><button className="avatar" aria-label="Open profile menu" aria-expanded={profileMenu} aria-controls="profile-menu" onClick={() => setProfileMenu(!profileMenu)}>{initials(user)}</button>{profileMenu && <div id="profile-menu" className="profile-dropdown"><strong>{fullName(user)}</strong><small>{user.email}</small><Link to="/profile">Your profile</Link><Link to="/settings">Settings</Link><button onClick={logout}>Logout ↗</button></div>}</div>
   </header>;
 }
@@ -474,7 +473,7 @@ export default function App() {
     return () => { clearInterval(timer); window.removeEventListener('focus', update); };
   }, [refreshSession]);
   const { user, pending } = session;
-  const protectedRoute = ['/dashboard', '/profile', '/settings', '/send-email'].includes(route.path);
+  const protectedRoute = ['/dashboard', '/profile', '/settings'].includes(route.path);
   useEffect(() => {
     if (!ready) return;
     if (route.path === '/') route.navigate(user ? '/dashboard' : '/login', true);
@@ -483,7 +482,7 @@ export default function App() {
   }, [ready, route.path, Boolean(user)]);
   useEffect(() => {
     setWorkspace(route.path === '/dashboard' && route.query.get('workspace') === 'holidays' ? 'holidays' : null);
-    const label = { '/register': 'Create account', '/login': 'Sign in', '/verify-email': 'Verify email', '/verify-mobile': 'Verify mobile', '/unlock-account': 'Unlock account', '/dashboard': 'Dashboard', '/profile': 'Profile', '/settings': 'Settings', '/send-email': 'Send email' }[route.path] || 'Haven';
+    const label = { '/register': 'Create account', '/login': 'Sign in', '/verify-email': 'Verify email', '/verify-mobile': 'Verify mobile', '/unlock-account': 'Unlock account', '/dashboard': 'Dashboard', '/profile': 'Profile', '/settings': 'Settings' }[route.path] || 'Haven';
     document.title = `${label} · Haven`;
     const timer = setTimeout(() => { const heading = document.querySelector('h1'); if (heading && !document.querySelector('[role="dialog"]')) { heading.setAttribute('tabindex', '-1'); heading.focus({ preventScroll: true }); } }, 0);
     return () => clearTimeout(timer);
@@ -491,7 +490,7 @@ export default function App() {
   function openHolidays() { if (route.path !== '/dashboard') route.navigate('/dashboard?workspace=holidays'); else setWorkspace('holidays'); }
   if (!ready) return <main className="startup-screen"><span className="brand">haven.</span><div role="status"><div className="loader" aria-hidden="true" />Opening your space…</div></main>;
   let screen;
-  if (protectedRoute) screen = user ? <><div id="authenticated-shell"><Navigation onHolidays={openHolidays} /><main id="main-content">{route.path === '/dashboard' ? <Dashboard openWorkspace={setWorkspace} /> : route.path === '/profile' ? <Profile /> : route.path === '/send-email' ? <div className="content"><EmailForm available={session.services?.email || false} /><Footer /></div> : <Settings />}</main></div>{workspace && <Workspace initialTab={workspace} onClose={() => setWorkspace(null)} />}</> : null;
+  if (protectedRoute) screen = user ? <><div id="authenticated-shell"><Navigation onHolidays={openHolidays} /><main id="main-content">{route.path === '/dashboard' ? <Dashboard openWorkspace={setWorkspace} /> : route.path === '/profile' ? <Profile /> : <Settings />}</main></div>{workspace && <Workspace initialTab={workspace} onClose={() => setWorkspace(null)} />}</> : null;
   else screen = { '/register': <Registration />, '/login': <Login />, '/verify-email': <EmailVerification />, '/verify-mobile': <MobileVerification />, '/unlock-account': <Unlock /> }[route.path] || (route.path === '/' ? null : <NotFound />);
   const services = session.services || { email: false, sms: false, holidays: false };
   return <AppContext.Provider value={{ ...route, user, pending, services, refreshSession, settings, setSettings }}><a className="skip-link" href="#main-content">Skip to content</a>{startupError && <Notice>{startupError}</Notice>}{screen}</AppContext.Provider>;

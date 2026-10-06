@@ -16,11 +16,26 @@ class RequestError extends Error {
 }
 const timestamp = value => value ? new Date(value).getTime() : 0;
 const validToken = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+function formatBirthday(val) {
+  if (val instanceof Date) {
+    const y = val.getFullYear();
+    const m = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return `${m}/${d}/${y}`;
+  }
+  if (val) {
+    const str = String(val).slice(0, 10);
+    if (str.includes('-')) {
+      const [y, m, d] = str.split('-');
+      return `${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}/${y}`;
+    }
+    return str;
+  }
+  return '';
+}
 function publicUser(user) {
-  const birthday = user.birthday instanceof Date ? user.birthday.toISOString().slice(0,10) : String(user.birthday).slice(0,10);
-  const [year, month, day] = birthday.split('-');
   return { id: user.id, firstName: user.first_name, lastName: user.last_name, middleInitial: user.middle_initial || '',
-    birthday: `${month}/${day}/${year}`, email: user.email, mobile: user.mobile_number,
+    birthday: formatBirthday(user.birthday), email: user.email, mobile: user.mobile_number,
     country: ({ Philippines: 'PH', 'United States': 'US', 'United Kingdom': 'GB' })[user.country] || user.country,
     region: user.state, city: user.city, postal: user.zip_code, houseStreet: user.house_street,
     emailVerified: Boolean(user.email_verified_at), mobileVerified: Boolean(user.mobile_verified) };
@@ -144,7 +159,7 @@ function createApp({ db, store = new Store(db), emailService = email, smsService
     const to = rules.normalizeEmail(values.email);
     const [month, day, year] = values.birthday.split('/');
     const user = { id: crypto.randomUUID(), first_name: values.firstName.trim(), last_name: values.lastName.trim(),
-      middle_initial: values.middleInitial || null, birthday: `${year}-${month}-${day}`, password_hash: passwordHash,
+      middle_initial: values.middleInitial || null, birthday: `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`, password_hash: passwordHash,
       email: to, email_verified_at: null, mobile_verified: 0,
       mobile_number: rules.internationalMobileNumber(values.mobile, values.country) };
     const token = await store.transaction(async tx => {
